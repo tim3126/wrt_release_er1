@@ -41,6 +41,12 @@ reset_feeds_conf() {
     git_retry clean -f -d
     git_retry pull
     if [[ $COMMIT_HASH != "none" ]]; then
-        git_retry checkout "$COMMIT_HASH"
+        # A fresh build uses a depth-1 clone, so an older pinned commit is not
+        # necessarily present locally. Fetch the exact commit before checkout
+        # to make device profiles reproducible on clean builders.
+        if ! git cat-file -e "$COMMIT_HASH^{commit}" 2>/dev/null; then
+            git_retry fetch --depth 1 origin "$COMMIT_HASH"
+        fi
+        git_retry checkout --detach "$COMMIT_HASH"
     fi
 }
