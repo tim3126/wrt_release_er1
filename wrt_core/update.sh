@@ -24,6 +24,7 @@ FEEDS_CONF="feeds.conf.default"
 GOLANG_REPO="https://github.com/sbwml/packages_lang_golang"
 GOLANG_BRANCH="26.x"
 THEME_SET=${5:-argon}
+CUSTOM_FEED_EXCLUDES=${6:-}
 LAN_ADDR="192.168.1.1"
 
 SCRIPT_DIR=$(cd $(dirname $0) && pwd)

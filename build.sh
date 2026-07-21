@@ -14,6 +14,8 @@ fi
 
 BASE_PATH=$(cd "$WRT_CORE_PATH" && pwd)
 
+source "$BASE_PATH/modules/profile_verify.sh"
+
 REPO_ROOT=$(cd "$BASE_PATH/.." && pwd)
 
 Dev=$1
@@ -419,6 +421,7 @@ COMMIT_HASH=$(read_ini_by_key "COMMIT_HASH")
 COMMIT_HASH=${COMMIT_HASH:-none}
 THEME_SET=$(read_ini_by_key "THEME_SET")
 THEME_SET=${THEME_SET:-argon}
+CUSTOM_FEED_EXCLUDES=$(read_ini_by_key "CUSTOM_FEED_EXCLUDES")
 
 resolve_config_fragments
 
@@ -432,7 +435,7 @@ if [[ -d action_build ]]; then
     BUILD_DIR="action_build"
 fi
 
-"$BASE_PATH/update.sh" "$REPO_URL" "$REPO_BRANCH" "$BUILD_DIR" "$COMMIT_HASH" "$THEME_SET"
+"$BASE_PATH/update.sh" "$REPO_URL" "$REPO_BRANCH" "$BUILD_DIR" "$COMMIT_HASH" "$THEME_SET" "$CUSTOM_FEED_EXCLUDES"
 
 apply_config
 print_config_fragment_summary
@@ -440,6 +443,7 @@ remove_uhttpd_dependency
 
 cd "$BASE_PATH/../$BUILD_DIR"
 make defconfig
+verify_selected_profile "$Dev" "$BASE_PATH/../$BUILD_DIR/.config" "$BASE_PATH/../$BUILD_DIR" "$COMMIT_HASH"
 
 if grep -qE "^CONFIG_TARGET_x86_64=y" "$CONFIG_FILE"; then
     DISTFEEDS_PATH="$BASE_PATH/../$BUILD_DIR/package/emortal/default-settings/files/99-distfeeds.conf"
