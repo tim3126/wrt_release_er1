@@ -56,6 +56,7 @@ verify_er1_libwrt_profile() {
         CONFIG_PACKAGE_openssh-sftp-server
         CONFIG_PACKAGE_luci-app-pbr
         CONFIG_PACKAGE_luci-theme-bootstrap
+        CONFIG_PACKAGE_luci-theme-argon
         CONFIG_PACKAGE_sqm-scripts-nss
         CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe
         CONFIG_PACKAGE_kmod-qca-nss-drv-lag-mgr
@@ -69,7 +70,6 @@ verify_er1_libwrt_profile() {
         CONFIG_PACKAGE_luci-app-quickstart
         CONFIG_PACKAGE_luci-app-uhttpd
         CONFIG_PACKAGE_luci-i18n-uhttpd-zh-cn
-        CONFIG_PACKAGE_luci-theme-argon
     )
 
     for symbol in "${required_symbols[@]}"; do
