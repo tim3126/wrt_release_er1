@@ -120,3 +120,67 @@ verify_selected_profile() {
             ;;
     esac
 }
+
+
+verify_er1_libwrt_artifacts() {
+    local firmware_dir="$1"
+    local manifest_path="$firmware_dir/libwrt-qualcommax-ipq60xx.manifest"
+    local package_name
+    local required_packages=(
+        mihomo-meta nikki luci-app-nikki luci-app-homeproxy
+        appfilter kmod-oaf luci-app-oaf lucky luci-app-lucky
+        ddns-go luci-app-ddns-go cups luci-app-cupsd
+        frpc luci-app-frpc uhttpd uhttpd-mod-ubus
+        vlmcsd luci-app-vlmcsd easytier luci-app-easytier
+        cloudflared luci-app-cloudflared docker dockerd luci-app-dockerman
+        openssh-sftp-server pbr luci-app-pbr
+        luci-theme-bootstrap luci-theme-argon
+        kmod-qca-nss-dp kmod-qca-nss-drv kmod-qca-nss-ecm kmod-qca-ssdk
+        sqm-scripts-nss
+    )
+    local forbidden_packages=(
+        luci-app-passwall luci-i18n-passwall-zh-cn
+        smartdns luci-app-smartdns luci-i18n-smartdns-zh-cn
+        quickfile luci-app-quickfile quickstart luci-app-quickstart
+        luci-app-uhttpd luci-i18n-uhttpd-zh-cn
+    )
+
+    if [ ! -f "$manifest_path" ]; then
+        echo "Error: ER1 manifest not found: $manifest_path" >&2
+        return 1
+    fi
+
+    for package_name in "${required_packages[@]}"; do
+        if ! grep -qE "^${package_name} - " "$manifest_path"; then
+            echo "Error: required ER1 package missing from manifest: $package_name" >&2
+            return 1
+        fi
+    done
+
+    for package_name in "${forbidden_packages[@]}"; do
+        if grep -qE "^${package_name} - " "$manifest_path"; then
+            echo "Error: forbidden ER1 package present in manifest: $package_name" >&2
+            return 1
+        fi
+    done
+
+    if ! grep -q '"jdcloud_re-cs-07"' "$firmware_dir/profiles.json"; then
+        echo "Error: ER1 profile missing from profiles.json." >&2
+        return 1
+    fi
+
+    (cd "$firmware_dir" && sha256sum -c SHA256SUMS) || return 1
+    echo "ER1 artifacts verified: manifest policy, profile metadata and SHA-256 checks passed."
+}
+
+
+verify_profile_artifacts() {
+    local dev="$1"
+    local firmware_dir="$2"
+
+    case "$dev" in
+        jdcloud_er1_libwrt)
+            verify_er1_libwrt_artifacts "$firmware_dir"
+            ;;
+    esac
+}
