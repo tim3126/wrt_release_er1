@@ -28,6 +28,8 @@ verify_er1_libwrt_profile() {
     local source_dir="$2"
     local expected_commit="$3"
     local actual_commit
+    local kernel_patchver
+    local kernel_suffix
     local kernel_version
     local selected_devices
     local symbol
@@ -92,7 +94,11 @@ verify_er1_libwrt_profile() {
         return 1
     fi
 
-    kernel_version=$(make --no-print-directory -s -C "$source_dir" kernelversion | tail -n 1)
+    kernel_patchver=$(sed -n 's/^KERNEL_PATCHVER:=[[:space:]]*//p' \
+        "$source_dir/target/linux/qualcommax/Makefile" | head -n 1)
+    kernel_suffix=$(sed -n "s/^LINUX_VERSION-${kernel_patchver}[[:space:]]*=[[:space:]]*//p" \
+        "$source_dir/target/linux/generic/kernel-${kernel_patchver}" | head -n 1)
+    kernel_version="${kernel_patchver}${kernel_suffix}"
     if [ "$kernel_version" != "6.12.94" ]; then
         echo "Error: ER1 profile expects kernel 6.12.94, got $kernel_version." >&2
         return 1
