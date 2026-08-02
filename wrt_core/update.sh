@@ -98,6 +98,7 @@ stage_pre_install_source_fixes() {
     update_mosdns_deconfig
     fix_quickstart
     update_oaf_deconfig
+    fix_ddns_go_default_config
     add_timecontrol
     add_quickfile
     update_lucky

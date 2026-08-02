@@ -261,6 +261,37 @@ EOF
 }
 
 
+fix_ddns_go_default_config() {
+    local custom_feed_dir
+    local config_source
+    local makefile_path
+
+    custom_feed_dir=$(get_custom_feed_worktree_dir)
+    config_source="$custom_feed_dir/ddns-go/file/ddns-go.config"
+    makefile_path="$custom_feed_dir/ddns-go/Makefile"
+
+    if [ ! -f "$makefile_path" ]; then
+        echo "Error: ddns-go Makefile not found: $makefile_path" >&2
+        return 1
+    fi
+
+    install -Dm644 "$BASE_PATH/patches/ddns-go.config" "$config_source"
+
+    if ! grep -qF '$(CURDIR)/file/ddns-go.config $(1)/etc/config/ddns-go' "$makefile_path"; then
+        sed -i '/INSTALL_BIN.*ddns-go\.init.*ddns-go/a\
+\
+\t$(INSTALL_DIR) $(1)/etc/config\
+\t$(INSTALL_CONF) $(CURDIR)/file/ddns-go.config $(1)/etc/config/ddns-go' "$makefile_path"
+    fi
+
+    if ! grep -qFx "config basic 'config'" "$config_source" \
+        || ! grep -qF '$(INSTALL_CONF) $(CURDIR)/file/ddns-go.config $(1)/etc/config/ddns-go' "$makefile_path"; then
+        echo "Error: failed to install the DDNS-Go default UCI configuration." >&2
+        return 1
+    fi
+}
+
+
 fix_easytier_mk() {
     local mk_path="$(get_custom_feed_worktree_dir)/luci-app-easytier/easytier/Makefile"
     if [ -f "$mk_path" ]; then
