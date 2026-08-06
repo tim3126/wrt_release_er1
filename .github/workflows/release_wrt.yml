@@ -15,6 +15,7 @@ on:
           - cmcc_rax3000m_immwrt
           - gemtek_w1701k_immwrt
           - jdcloud_ax6000_immwrt
+          - jdcloud_er1_libwrt
           - jdcloud_ipq60xx_immwrt
           - jdcloud_ipq60xx_libwrt
           - link_nn6000v2_immwrt
@@ -36,6 +37,9 @@ on:
         required: false
         description: Remove default config fragments, comma separated
         default: ""
+
+permissions:
+  contents: write
 
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
