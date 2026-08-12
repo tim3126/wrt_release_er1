@@ -25,7 +25,7 @@ GOLANG_REPO="https://github.com/sbwml/packages_lang_golang"
 GOLANG_BRANCH="26.x"
 THEME_SET=${5:-argon}
 CUSTOM_FEED_EXCLUDES=${6:-}
-LAN_ADDR="192.168.1.1"
+LAN_ADDR="192.168.10.1"
 
 SCRIPT_DIR=$(cd $(dirname $0) && pwd)
 BASE_PATH=${BASE_PATH:-$SCRIPT_DIR}
@@ -87,7 +87,6 @@ stage_pre_install_source_fixes() {
     update_tcping
     add_ax6600_led
     set_custom_task
-    apply_passwall_tweaks
     update_nss_pbuf_performance
     set_build_signature
     update_nss_diag
@@ -95,7 +94,6 @@ stage_pre_install_source_fixes() {
     fix_compile_coremark
     update_dnsmasq_conf
     add_backup_info_to_sysupgrade
-    update_mosdns_deconfig
     fix_quickstart
     update_oaf_deconfig
     fix_ddns_go_default_config

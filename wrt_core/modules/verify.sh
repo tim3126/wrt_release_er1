@@ -6,17 +6,13 @@ verify_custom_feed_installed_paths() {
     local custom_feed_package_dir
     # install_feeds 后必须存在的 custom_feed 包路径。
     local required_package_dirs=(
-        luci-app-adguardhome luci-app-mosdns v2ray-geodata luci-app-easytier
+        luci-app-adguardhome v2ray-geodata luci-app-easytier
         nikki luci-app-nikki mihomo-meta luci-app-emmc-health
     )
     local missing_package_dirs=()
 
     custom_feed_name=$(get_custom_feed_name)
     custom_feed_package_dir=$(get_custom_feed_package_dir)
-
-    if ! custom_feed_package_excluded "passwall"; then
-        required_package_dirs+=(luci-app-passwall)
-    fi
 
     collect_missing_directories "$custom_feed_package_dir" required_package_dirs missing_package_dirs
 

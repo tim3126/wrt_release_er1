@@ -78,10 +78,6 @@ update_script_priority() {
         sed -i 's/START=.*/START=89/g' "$pbuf_path"
     fi
 
-    local mosdns_path="$(get_custom_feed_package_dir)/luci-app-mosdns/root/etc/init.d/mosdns"
-    if [ -d "${mosdns_path%/*}" ] && [ -f "$mosdns_path" ]; then
-        sed -i 's/START=.*/START=94/g' "$mosdns_path"
-    fi
 }
 
 

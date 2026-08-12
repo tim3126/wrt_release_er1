@@ -41,8 +41,6 @@ verify_er1_libwrt_profile() {
         CONFIG_PACKAGE_mihomo-meta
         CONFIG_PACKAGE_nikki
         CONFIG_PACKAGE_luci-app-nikki
-        CONFIG_PACKAGE_luci-app-passwall
-        CONFIG_PACKAGE_luci-i18n-passwall-zh-cn
         CONFIG_PACKAGE_luci-app-homeproxy
         CONFIG_PACKAGE_luci-app-adguardhome
         CONFIG_PACKAGE_luci-app-autoreboot
@@ -81,6 +79,10 @@ verify_er1_libwrt_profile() {
         CONFIG_PACKAGE_luci-app-store
         CONFIG_PACKAGE_luci-app-uhttpd
         CONFIG_PACKAGE_luci-i18n-uhttpd-zh-cn
+        CONFIG_PACKAGE_luci-app-passwall
+        CONFIG_PACKAGE_luci-i18n-passwall-zh-cn
+        CONFIG_PACKAGE_mosdns
+        CONFIG_PACKAGE_luci-app-mosdns
     )
 
     for symbol in "${required_symbols[@]}"; do
@@ -137,7 +139,7 @@ verify_er1_libwrt_artifacts() {
     local package_name
     local required_packages=(
         mihomo-meta nikki luci-app-nikki
-        luci-app-passwall luci-i18n-passwall-zh-cn luci-app-homeproxy
+        luci-app-homeproxy
         luci-app-adguardhome luci-app-autoreboot luci-app-diskman
         luci-app-emmc-health luci-app-samba4 luci-app-sqm
         appfilter kmod-oaf luci-app-oaf lucky luci-app-lucky
@@ -155,6 +157,7 @@ verify_er1_libwrt_artifacts() {
         quickfile luci-app-quickfile quickstart luci-app-quickstart
         luci-app-istorex luci-app-store
         luci-app-uhttpd luci-i18n-uhttpd-zh-cn
+        mosdns luci-app-mosdns luci-app-passwall luci-i18n-passwall-zh-cn
     )
 
     if [ ! -f "$manifest_path" ]; then
