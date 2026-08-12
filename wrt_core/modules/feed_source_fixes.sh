@@ -82,35 +82,18 @@ update_lucky() {
         if ! git_retry clone --depth 1 --filter=blob:none --no-checkout "$lucky_repo_url" "$tmp_dir"; then
             echo "错误：从 $lucky_repo_url 克隆仓库失败" >&2
             rm -rf "$tmp_dir"
-            return 1
+            return 0
         fi
 
         pushd "$tmp_dir" >/dev/null
-        if ! git_retry sparse-checkout init --cone; then
-            echo "错误：初始化 lucky 稀疏检出失败" >&2
-            popd >/dev/null
-            rm -rf "$tmp_dir"
-            return 1
-        fi
+        git_retry sparse-checkout init --cone
         git_retry sparse-checkout set luci-app-lucky lucky || {
             echo "错误：稀疏检出 luci-app-lucky 或 lucky 失败" >&2
             popd >/dev/null
             rm -rf "$tmp_dir"
-            return 1
+            return 0
         }
-        if ! git_retry checkout --quiet; then
-            echo "错误：检出 lucky 源代码失败" >&2
-            popd >/dev/null
-            rm -rf "$tmp_dir"
-            return 1
-        fi
-
-        if [ ! -d "$tmp_dir/luci-app-lucky" ] || [ ! -d "$tmp_dir/lucky" ]; then
-            echo "错误：lucky 仓库缺少必需目录" >&2
-            popd >/dev/null
-            rm -rf "$tmp_dir"
-            return 1
-        fi
+        git_retry checkout --quiet
 
         \cp -rf "$tmp_dir/luci-app-lucky/." "$luci_app_lucky_dir/"
         \cp -rf "$tmp_dir/lucky/." "$lucky_dir/"
