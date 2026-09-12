@@ -215,6 +215,8 @@ verify_er1_rootfs_policy() (
     local private_key_path
     local openssl_bin
     local derived_public_key
+    local plugin_feed_mode
+    local plugin_feed_key_sha256
     local -a root_members=()
     local -a helpers=(
         sbin/cpuusage
@@ -232,6 +234,10 @@ verify_er1_rootfs_policy() (
         etc/apk/repositories.d/distfeeds.list
         etc/apk/repositories.d/customfeeds.list
         etc/uci-defaults/995_configure_taiyi_apk_repositories
+        etc/uci-defaults/996_capture_taiyi_apk_plugin_baseline
+        usr/libexec/taiyi-apk-plugin-policy
+        usr/share/taiyi/apk-plugin-catalog
+        usr/share/taiyi/apk-plugin-policy-version
     )
     local -a forbidden_paths=(
         bin/opkg
@@ -284,12 +290,88 @@ verify_er1_rootfs_policy() (
             return 1
         fi
     done
+
+    taiyi_plugin_feed_load_config || return 1
+    plugin_feed_mode=$TAIYI_PLUGIN_FEED_MODE
+    case "$plugin_feed_mode" in
+        disabled)
+            if [[ -e $rootfs/etc/apk/keys/taiyi-plugin-feed.pem \
+                || -e $rootfs/usr/share/taiyi/apk-plugin-feed ]]; then
+                echo "Error: disabled Taiyi plugin feed leaked rootfs inputs." >&2
+                return 1
+            fi
+            ;;
+        enabled)
+            if [[ ! -f $rootfs/etc/apk/keys/taiyi-plugin-feed.pem \
+                || -L $rootfs/etc/apk/keys/taiyi-plugin-feed.pem \
+                || ! -f $rootfs/usr/share/taiyi/apk-plugin-feed ]]; then
+                echo "Error: enabled Taiyi plugin feed rootfs inputs are missing." >&2
+                return 1
+            fi
+            plugin_feed_key_sha256=$(sha256sum "$rootfs/etc/apk/keys/taiyi-plugin-feed.pem" | awk '{print $1}')
+            if [[ $plugin_feed_key_sha256 != "$TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256" ]] \
+                || ! cmp -s "$rootfs/usr/share/taiyi/apk-plugin-feed" \
+                    <(printf '%s\n' "$TAIYI_PLUGIN_FEED_INDEX_URL"); then
+                echo "Error: enabled Taiyi plugin feed differs from reviewed build inputs." >&2
+                return 1
+            fi
+            ;;
+        *)
+            echo "Error: unknown Taiyi plugin feed mode: $plugin_feed_mode" >&2
+            return 1
+            ;;
+    esac
+
     if [[ ! -x $rootfs/etc/uci-defaults/995_configure_taiyi_apk_repositories ]]; then
         echo "Error: Taiyi APK repository policy is not executable." >&2
         return 1
     fi
-    if LC_ALL=C grep -q $'\r' "$rootfs/etc/uci-defaults/995_configure_taiyi_apk_repositories"; then
-        echo "Error: CR byte found in Taiyi APK repository policy." >&2
+    if [[ ! -x $rootfs/etc/uci-defaults/996_capture_taiyi_apk_plugin_baseline ]]; then
+        echo "Error: Taiyi APK plugin baseline initializer is not executable." >&2
+        return 1
+    fi
+    if [[ ! -x $rootfs/usr/libexec/taiyi-apk-plugin-policy ]]; then
+        echo "Error: Taiyi APK plugin transaction policy is not executable." >&2
+        return 1
+    fi
+    if LC_ALL=C grep -q $'\r' "$rootfs/etc/uci-defaults/995_configure_taiyi_apk_repositories" \
+        || LC_ALL=C grep -q $'\r' "$rootfs/etc/uci-defaults/996_capture_taiyi_apk_plugin_baseline" \
+        || LC_ALL=C grep -q $'\r' "$rootfs/usr/libexec/taiyi-apk-plugin-policy" \
+        || LC_ALL=C grep -q $'\r' "$rootfs/usr/share/taiyi/apk-plugin-catalog"; then
+        echo "Error: CR byte found in a Taiyi APK policy input." >&2
+        return 1
+    fi
+    if ! grep -Eq '^[1-9][0-9]*$' "$rootfs/usr/share/taiyi/apk-plugin-policy-version" \
+        || [[ $(wc -l <"$rootfs/usr/share/taiyi/apk-plugin-policy-version") -ne 1 ]]; then
+        echo "Error: Taiyi APK plugin policy version is invalid." >&2
+        return 1
+    fi
+    if ! awk '
+        /^#/ || NF == 0 { next }
+        NF != 2 { invalid = 1; next }
+        $1 == "safe" { safe = 1 }
+        $1 == "network-critical" { critical = 1 }
+        $1 == "firmware-only" { firmware = 1 }
+        $1 != "safe" && $1 != "network-critical" && $1 != "firmware-only" { invalid = 1 }
+        $2 !~ /^[A-Za-z0-9][A-Za-z0-9+_.-]*$/ { invalid = 1 }
+        ++seen[$2] != 1 { invalid = 1 }
+        END { exit invalid || !(safe && critical && firmware) }
+    ' "$rootfs/usr/share/taiyi/apk-plugin-catalog"; then
+        echo "Error: Taiyi APK plugin catalog is invalid." >&2
+        return 1
+    fi
+    if ! grep -qF 'if [ "$package_name" != "$requested_package" ]; then' \
+        "$rootfs/usr/libexec/taiyi-apk-plugin-policy"; then
+        echo "Error: Taiyi APK plugin policy does not enforce exact package plans." >&2
+        return 1
+    fi
+    if ! grep -qFx 'firmware-only pbr' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'firmware-only nikki' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'firmware-only miniupnpd' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'firmware-only samba4' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'firmware-only kmod-oaf' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'firmware-only luci-lib-docker' "$rootfs/usr/share/taiyi/apk-plugin-catalog"; then
+        echo "Error: Taiyi APK plugin catalog does not protect firmware-only packages." >&2
         return 1
     fi
 

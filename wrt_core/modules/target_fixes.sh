@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # target、kernel 与 base system 源码修正。
 
+if ! declare -F install_taiyi_plugin_feed_rootfs >/dev/null; then
+    source "$BASE_PATH/modules/plugin_feed.sh"
+fi
+
 fix_default_set() {
     # 注入默认主题、系统设置和目标平台通用补丁。
     if [ -d "$BUILD_DIR/feeds/luci/collections/" ]; then
@@ -17,11 +21,26 @@ fix_default_set() {
         rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/993_disable_unpublished_distfeeds"
         install -Dm544 "$BASE_PATH/patches/995_configure_taiyi_apk_repositories" \
             "$BUILD_DIR/package/base-files/files/etc/uci-defaults/995_configure_taiyi_apk_repositories"
+        install -Dm755 "$BASE_PATH/patches/taiyi-apk-plugin-policy" \
+            "$BUILD_DIR/package/base-files/files/usr/libexec/taiyi-apk-plugin-policy"
+        install -Dm644 "$BASE_PATH/patches/taiyi-apk-plugin-catalog" \
+            "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-catalog"
+        install -Dm644 "$BASE_PATH/patches/taiyi-apk-plugin-policy-version" \
+            "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-policy-version"
+        install -Dm544 "$BASE_PATH/patches/996_capture_taiyi_apk_plugin_baseline" \
+            "$BUILD_DIR/package/base-files/files/etc/uci-defaults/996_capture_taiyi_apk_plugin_baseline"
+        install_taiyi_plugin_feed_rootfs "$BUILD_DIR/package/base-files/files"
         rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_set-wifi-uci.sh"
     else
         install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
         rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/993_disable_unpublished_distfeeds"
         rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/995_configure_taiyi_apk_repositories"
+        rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/996_capture_taiyi_apk_plugin_baseline"
+        rm -f "$BUILD_DIR/package/base-files/files/usr/libexec/taiyi-apk-plugin-policy"
+        rm -f "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-catalog"
+        rm -f "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-policy-version"
+        rm -f "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-feed"
+        rm -f "$BUILD_DIR/package/base-files/files/etc/apk/keys/taiyi-plugin-feed.pem"
         install -Dm544 "$BASE_PATH/patches/992_set-wifi-uci.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_set-wifi-uci.sh"
     fi
 

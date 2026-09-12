@@ -3,7 +3,10 @@ set -e
 
 repo_dir="${APK_REPOSITORIES_DIR:-/etc/apk/repositories.d}"
 distfeeds="$repo_dir/distfeeds.list"
+customfeeds="$repo_dir/customfeeds.list"
 tmp="$repo_dir/.distfeeds.list.taiyi.$$"
+custom_tmp="$repo_dir/.customfeeds.list.taiyi.$$"
+plugin_feed_file="${TAIYI_PLUGIN_FEED_FILE:-/usr/share/taiyi/apk-plugin-feed}"
 legacy_opkg_dir="${LEGACY_OPKG_DIR:-/etc/opkg}"
 legacy_opkg_conf="${LEGACY_OPKG_CONF:-/etc/opkg.conf}"
 legacy_opkg_lists="${LEGACY_OPKG_LISTS_DIR:-/var/opkg-lists}"
@@ -12,7 +15,7 @@ release='25.12.2'
 arch='aarch64_cortex-a53'
 
 cleanup() {
-    rm -f "$tmp"
+    rm -f "$tmp" "$custom_tmp"
 }
 trap cleanup EXIT INT TERM
 
@@ -27,6 +30,35 @@ $mirror/releases/$release/packages/$arch/telephony/packages.adb
 EOF
 chmod 0644 "$tmp"
 mv -f "$tmp" "$distfeeds"
+
+# A reviewed image may include one dedicated signed Taiyi add-on index. Preserve
+# administrator feed entries and append only the exact baked URL once.
+if [ -e "$plugin_feed_file" ]; then
+    [ -f "$plugin_feed_file" ] && [ ! -L "$plugin_feed_file" ] || {
+        echo "Taiyi plugin feed input is not a regular file." >&2
+        exit 1
+    }
+    plugin_feed=$(sed -n '1p' "$plugin_feed_file")
+    [ "$(wc -l <"$plugin_feed_file")" -eq 1 ] \
+        && [ -n "$plugin_feed" ] \
+        && printf '%s\n' "$plugin_feed" | grep -Eq '^https://[A-Za-z0-9][A-Za-z0-9.-]*/[A-Za-z0-9._~/%+:-]*/packages\.adb$' \
+        && ! printf '%s\n' "$plugin_feed" | grep -q '\.\.' || {
+        echo "Taiyi plugin feed input is invalid." >&2
+        exit 1
+    }
+
+    if [ -f "$customfeeds" ] && [ -L "$customfeeds" ]; then
+        echo "Taiyi APK custom feeds list must not be a symbolic link." >&2
+        exit 1
+    fi
+    : >"$custom_tmp"
+    [ -f "$customfeeds" ] && cat "$customfeeds" >"$custom_tmp"
+    if ! grep -qFx -- "$plugin_feed" "$custom_tmp"; then
+        printf '%s\n' "$plugin_feed" >>"$custom_tmp"
+    fi
+    chmod 0644 "$custom_tmp"
+    mv -f "$custom_tmp" "$customfeeds"
+fi
 trap - EXIT INT TERM
 
 # Keep the ImmortalWrt mirror selector consistent with the effective repository.

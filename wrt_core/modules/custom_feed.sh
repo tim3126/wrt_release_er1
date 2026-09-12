@@ -141,6 +141,130 @@ fix_emmc_health_luci_js_deps() {
         sed -i '/^[[:space:]]*DEPENDS:=/ s/[[:space:]]*+luci-js-deps//g' "$makefile_path"
         echo "已移除 luci-app-emmc-health 的 luci-js-deps 兼容性依赖。"
     fi
+
+    # R8 is APK-only. The upstream convenience installer invokes opkg from a
+    # LuCI package, which is incompatible with the controlled plugin policy.
+    sed -i '/emmc-health-install-mmc/d' "$makefile_path"
+    if grep -q 'emmc-health-install-mmc' "$makefile_path"; then
+        echo "错误：luci-app-emmc-health 仍会安装旧 opkg helper" >&2
+        return 1
+    fi
+}
+
+
+easytier_recipe_has_integrity_guard() {
+    local makefile_path="$1"
+    local expected_download
+    local expected_checksum
+    local expected_extract
+    local download_line
+    local checksum_line
+    local extract_line
+
+    expected_download="wget https://github.com/EasyTier/EasyTier/releases/download/v\$(PKG_VERSION)/\$(PKG_NAME)-linux-\$(APP_ARCH)-v\$(PKG_VERSION).zip -O \$(PKG_BUILD_DIR)/\$(PKG_NAME)-\$(PKG_VERSION).zip;"
+    expected_checksum="printf '%s  %s\\n' '$EASYTIER_AARCH64_RELEASE_SHA256' '\$(PKG_BUILD_DIR)/\$(PKG_NAME)-\$(PKG_VERSION).zip' | sha256sum -c -;"
+    expected_extract="unzip -o -j \$(PKG_BUILD_DIR)/\$(PKG_NAME)-\$(PKG_VERSION).zip -d \$(PKG_BUILD_DIR);"
+
+    grep -qFx "EASYTIER_SOURCE_SHA256:=$EASYTIER_AARCH64_RELEASE_SHA256" "$makefile_path" \
+        && grep -qF 'if [ "$(APP_ARCH)" != "aarch64" ]; then' "$makefile_path" \
+        || return 1
+
+    download_line=$(grep -nF "$expected_download" "$makefile_path" | cut -d: -f1)
+    checksum_line=$(grep -nF "$expected_checksum" "$makefile_path" | cut -d: -f1)
+    extract_line=$(grep -nF "$expected_extract" "$makefile_path" | cut -d: -f1)
+    if [[ ! $download_line =~ ^[1-9][0-9]*$ ]] \
+        || [[ ! $checksum_line =~ ^[1-9][0-9]*$ ]] \
+        || [[ ! $extract_line =~ ^[1-9][0-9]*$ ]]; then
+        return 1
+    fi
+
+    (( download_line < checksum_line && checksum_line < extract_line ))
+}
+
+
+fix_easytier_release_integrity() {
+    local package_dir="$1"
+    local makefile_path="$package_dir/Makefile"
+    local expected_eval='$(eval $(call BuildPackage,$(PKG_NAME)))'
+    local tmp_makefile
+
+    if [[ ! ${EASYTIER_AARCH64_RELEASE_SHA256:-} =~ ^[0-9a-f]{64}$ ]]; then
+        echo "错误：缺少有效的 EasyTier aarch64 release SHA-256" >&2
+        return 1
+    fi
+    if [[ ! -f "$makefile_path" ]]; then
+        echo "错误：easytier Makefile 不存在：$makefile_path" >&2
+        return 1
+    fi
+    if grep -q '^EASYTIER_SOURCE_SHA256:=' "$makefile_path"; then
+        easytier_recipe_has_integrity_guard "$makefile_path" \
+            || { echo "错误：easytier 已有 marker 但缺少完整 archive integrity guard" >&2; return 1; }
+        return 0
+    fi
+    if ! grep -qFx "$expected_eval" "$makefile_path"; then
+        echo "错误：easytier Makefile 缺少预期的 BuildPackage 入口" >&2
+        return 1
+    fi
+
+    tmp_makefile=$(mktemp "$package_dir/.Makefile.XXXXXX") || return 1
+    if ! awk -v hash="$EASYTIER_AARCH64_RELEASE_SHA256" -v eval_line="$expected_eval" '
+$0 == eval_line {
+    print ""
+    print "# Taiyi verifies the exact ER1 release archive before extracting it."
+    print "EASYTIER_SOURCE_SHA256:=" hash
+    print "define Build/Prepare"
+    print "\tif [ \"$(APP_ARCH)\" != \"aarch64\" ]; then \\\\"
+    print "\t\techo \"Error: Taiyi only locks the EasyTier aarch64 release archive\" >&2; \\\\"
+    print "\t\texit 1; \\\\"
+    print "\tfi"
+    print "\tmkdir -p $(PKG_BUILD_DIR)"
+    print "\tif [ ! -f $(PKG_BUILD_DIR)/easytier-core ]; then \\\\"
+    print "\t\twget https://github.com/EasyTier/EasyTier/releases/download/v$(PKG_VERSION)/$(PKG_NAME)-linux-$(APP_ARCH)-v$(PKG_VERSION).zip -O $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip; \\\\"
+    print "\t\tprintf '\''%s  %s\\\\n'\'' '\''" hash "'\'' '\''$(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip'\'' | sha256sum -c -; \\\\"
+    print "\t\tunzip -o -j $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip -d $(PKG_BUILD_DIR); \\\\"
+    print "\t\trm -f $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip; \\\\"
+    print "\tfi"
+    print "endef"
+    print ""
+}
+{ print }
+' "$makefile_path" >"$tmp_makefile"; then
+        rm -f "$tmp_makefile"
+        return 1
+    fi
+    if ! sed -i \
+        -e 's/\\\\$/\\/g' \
+        -e 's/\\\\n/\\n/g' \
+        "$tmp_makefile"; then
+        rm -f "$tmp_makefile"
+        return 1
+    fi
+    mv "$tmp_makefile" "$makefile_path"
+
+    easytier_recipe_has_integrity_guard "$makefile_path" \
+        || { echo "错误：未能向 easytier Makefile 注入完整 archive integrity guard" >&2; return 1; }
+}
+
+
+fix_cups_source_integrity() {
+    local package_dir="$1"
+    local makefile_path="$package_dir/Makefile"
+
+    if [[ ! ${CUPS_SOURCE_SHA256:-} =~ ^[0-9a-f]{64}$ ]]; then
+        echo "错误：缺少有效的 CUPS source SHA-256" >&2
+        return 1
+    fi
+    if [[ ! -f "$makefile_path" ]]; then
+        echo "错误：cups Makefile 不存在：$makefile_path" >&2
+        return 1
+    fi
+
+    sed -i "s/^PKG_MD5SUM:=.*/PKG_HASH:=$CUPS_SOURCE_SHA256/" "$makefile_path"
+    if grep -q '^PKG_MD5SUM:=' "$makefile_path" \
+        || ! grep -qFx "PKG_HASH:=$CUPS_SOURCE_SHA256" "$makefile_path"; then
+        echo "错误：未能将 CUPS source integrity 升级为 SHA-256" >&2
+        return 1
+    fi
 }
 
 
@@ -173,7 +297,7 @@ install_custom_feed() {
         luci-app-ddns-go taskd luci-lib-xterm luci-lib-taskd luci-app-store quickstart \
         luci-app-quickstart luci-app-istorex luci-app-cloudflarespeedtest netdata luci-app-netdata \
         lucky luci-app-lucky luci-app-openclash luci-app-homeproxy luci-app-amlogic \
-        oaf open-app-filter luci-app-oaf easytier luci-app-easytier \
+        easytier luci-app-easytier \
         msd_lite luci-app-msd_lite cups luci-app-cupsd
     )
     local required_feed_dirs=(
@@ -204,6 +328,7 @@ install_custom_feed() {
     custom_feed_sources=(
         "kenzok8/small-package|https://github.com/kenzok8/small-package.git||$SMALL_PACKAGE_COMMIT|${base_custom_feed_packages[*]}"
         "nikkinikki-org/OpenWrt-nikki|https://github.com/nikkinikki-org/OpenWrt-nikki.git|main|$NIKKI_COMMIT|nikki luci-app-nikki mihomo-meta"
+        "destan19/OpenAppFilter|https://github.com/destan19/OpenAppFilter.git|master|$OAF_COMMIT|oaf open-app-filter luci-app-oaf"
     )
 
     feeds_path=$(get_feeds_path)
@@ -236,6 +361,15 @@ install_custom_feed() {
         rm -rf "$custom_feed_dir"
         return 1
     fi
+
+    fix_easytier_release_integrity "$custom_feed_dir/easytier" || {
+        rm -rf "$custom_feed_dir"
+        return 1
+    }
+    fix_cups_source_integrity "$custom_feed_dir/cups" || {
+        rm -rf "$custom_feed_dir"
+        return 1
+    }
 
     register_local_feed_source "$custom_feed_dir" "$feeds_path"
 

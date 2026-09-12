@@ -16,6 +16,7 @@ BASE_PATH=$(cd "$WRT_CORE_PATH" && pwd)
 
 source "$BASE_PATH/modules/profile_verify.sh"
 source "$BASE_PATH/modules/build_state.sh"
+source "$BASE_PATH/modules/plugin_feed.sh"
 
 REPO_ROOT=$(cd "$BASE_PATH/.." && pwd)
 
@@ -454,6 +455,8 @@ run_container_build() {
         -e WRT_RELEASE_TREE_STATE \
         -e WRT_RELEASE_INPUT_SHA256 \
         -e BUILD_CONTAINER_IMAGE_ID \
+        -e BUILD_CONTAINER_IMAGE_REF \
+        -e BUILD_CONTAINER_MANIFEST_DIGEST \
         --shm-size=8g \
         --ipc=shareable \
         --ulimit nofile=65535:65535 \
@@ -522,6 +525,7 @@ COMMIT_HASH=${COMMIT_HASH:-none}
 THEME_SET=$(read_ini_by_key "THEME_SET")
 THEME_SET=${THEME_SET:-argon}
 CUSTOM_FEED_EXCLUDES=$(read_ini_by_key "CUSTOM_FEED_EXCLUDES")
+taiyi_plugin_feed_load_config
 
 resolve_config_fragments
 
@@ -604,7 +608,15 @@ SOURCE_LOCKS_SHA256=$(build_state_value "$BUILD_STATE_FILE" "SourceLocksSha256")
 CONFIG_SHA256=$(build_state_value "$BUILD_STATE_FILE" "ConfigSha256")
 PREPARED_SOURCE_SHA256=$(build_state_value "$BUILD_STATE_FILE" "PreparedSourceSha256")
 APK_BUILD_PUBLIC_KEY_SHA256=$(build_state_value "$BUILD_STATE_FILE" "ApkBuildPublicKeySha256")
+TAIYI_PLUGIN_FEED_MODE=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedMode")
+TAIYI_PLUGIN_FEED_INDEX_URL=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedIndexUrl")
+TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedPublicKeySha256")
+TAIYI_PLUGIN_FEED_CATALOG_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedCatalogSha256")
+TAIYI_PLUGIN_FEED_ALLOWLIST_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedAllowlistSha256")
+TAIYI_PLUGIN_POLICY_VERSION_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginPolicyVersionSha256")
 BUILD_CONTAINER_BASE=$(build_state_value "$BUILD_STATE_FILE" "BuildContainerBase")
+BUILD_CONTAINER_IMAGE_REF=$(build_state_value "$BUILD_STATE_FILE" "BuildContainerImageRef")
+BUILD_CONTAINER_MANIFEST_DIGEST=$(build_state_value "$BUILD_STATE_FILE" "BuildContainerManifestDigest")
 BUILD_CONTAINER_IMAGE_ID=$(build_state_value "$BUILD_STATE_FILE" "BuildContainerImageId")
 KERNEL_PATCHVER=$(sed -n 's/^KERNEL_PATCHVER:=[[:space:]]*//p' \
     "$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/Makefile" | head -n 1)
@@ -620,10 +632,18 @@ SourceBranch: $REPO_BRANCH
 SourceCommit: $SOURCE_COMMIT
 SourceLocksSha256: $SOURCE_LOCKS_SHA256
 BuildContainerBase: $BUILD_CONTAINER_BASE
+BuildContainerImageRef: $BUILD_CONTAINER_IMAGE_REF
+BuildContainerManifestDigest: $BUILD_CONTAINER_MANIFEST_DIGEST
 BuildContainerImageId: $BUILD_CONTAINER_IMAGE_ID
 ConfigSha256: $CONFIG_SHA256
 PreparedSourceSha256: $PREPARED_SOURCE_SHA256
 ApkBuildPublicKeySha256: $APK_BUILD_PUBLIC_KEY_SHA256
+TaiyiPluginFeedMode: $TAIYI_PLUGIN_FEED_MODE
+TaiyiPluginFeedIndexUrl: $TAIYI_PLUGIN_FEED_INDEX_URL
+TaiyiPluginFeedPublicKeySha256: $TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256
+TaiyiPluginFeedCatalogSha256: $TAIYI_PLUGIN_FEED_CATALOG_SHA256
+TaiyiPluginFeedAllowlistSha256: $TAIYI_PLUGIN_FEED_ALLOWLIST_SHA256
+TaiyiPluginPolicyVersionSha256: $TAIYI_PLUGIN_POLICY_VERSION_SHA256
 Kernel: ${KERNEL_PATCHVER}${KERNEL_SUFFIX}
 ConfigFragments: $(join_fragments "${EFFECTIVE_CONFIG_FRAGMENTS[@]}")
 DownloadJobs: $DOWNLOAD_JOBS
@@ -637,6 +657,22 @@ EOF
 )
 
 verify_profile_artifacts "$Dev" "$FIRMWARE_DIR" "$BASE_PATH/../$BUILD_DIR"
+
+if [[ -n ${TAIYI_PLUGIN_FEED_STAGE_DIR:-} ]]; then
+    if [[ $Dev != jdcloud_er1_libwrt ]]; then
+        echo "Error: Taiyi plugin-feed staging is only supported for jdcloud_er1_libwrt." >&2
+        exit 1
+    fi
+    ALLOW_TAIYI_PLUGIN_FEED_STAGE=1 \
+        bash "$REPO_ROOT/tools/taiyi-build/publish-plugin-feed.sh" stage \
+            --source "$source_dir" \
+            --packages "$source_dir/bin/packages/aarch64_cortex-a53" \
+            --catalog "$BASE_PATH/patches/taiyi-apk-plugin-catalog" \
+            --allowlist "$BASE_PATH/taiyi-plugin-feed/allowlist" \
+            --policy-version "$BASE_PATH/patches/taiyi-apk-plugin-policy-version" \
+            --firmware-provenance "$FIRMWARE_DIR/BUILD_PROVENANCE.txt" \
+            --output "$TAIYI_PLUGIN_FEED_STAGE_DIR"
+fi
 
 if [[ -d action_build ]]; then
     make clean

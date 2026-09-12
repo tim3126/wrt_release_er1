@@ -20,6 +20,10 @@ jobs:
       model: jdcloud_er1_libwrt
       add_fragments: ""
       remove_fragments: ""
+      use_audited_builder: true
+      audited_builder_image: ${{ vars.TAIYI_BUILDER_IMAGE }}
+      audited_builder_manifest_digest: ${{ vars.TAIYI_BUILDER_MANIFEST_DIGEST }}
+      audited_builder_config_image_id: ${{ vars.TAIYI_BUILDER_CONFIG_IMAGE_ID }}
 
   release:
     needs: build
@@ -38,6 +42,10 @@ jobs:
       - name: Prepare Whitelisted Release Assets
         id: release_metadata
         shell: bash
+        env:
+          EXPECTED_TAIYI_BUILDER_IMAGE: ${{ vars.TAIYI_BUILDER_IMAGE }}
+          EXPECTED_TAIYI_BUILDER_MANIFEST_DIGEST: ${{ vars.TAIYI_BUILDER_MANIFEST_DIGEST }}
+          EXPECTED_TAIYI_BUILDER_CONFIG_IMAGE_ID: ${{ vars.TAIYI_BUILDER_CONFIG_IMAGE_ID }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -86,9 +94,17 @@ jobs:
           ' firmware/profiles.json >/dev/null
 
           expected_container_base='ubuntu:24.04@sha256:a61567bd31828687156d735ea8eb01ba4e37636e225dd6a48ba94136a70d9d61'
-          expected_container_id='sha256:671e57ed9daef17d6a23cd0315d04ed287e3307baf3004f031578069021da98b'
+          expected_container_ref=$EXPECTED_TAIYI_BUILDER_IMAGE
+          expected_manifest_digest=$EXPECTED_TAIYI_BUILDER_MANIFEST_DIGEST
+          expected_container_id=$EXPECTED_TAIYI_BUILDER_CONFIG_IMAGE_ID
+          [[ $expected_container_ref =~ @sha256:[0-9a-f]{64}$ ]]
+          [[ $expected_manifest_digest =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ ${expected_container_ref##*@} == "$expected_manifest_digest" ]]
+          [[ $expected_container_id =~ ^sha256:[0-9a-f]{64}$ ]]
           grep -qFx "WrtReleaseTreeState: clean" firmware/BUILD_PROVENANCE.txt
           grep -qFx "BuildContainerBase: $expected_container_base" firmware/BUILD_PROVENANCE.txt
+          grep -qFx "BuildContainerImageRef: $expected_container_ref" firmware/BUILD_PROVENANCE.txt
+          grep -qFx "BuildContainerManifestDigest: $expected_manifest_digest" firmware/BUILD_PROVENANCE.txt
           grep -qFx "BuildContainerImageId: $expected_container_id" firmware/BUILD_PROVENANCE.txt
 
           (cd firmware && sha256sum -c SHA256SUMS)

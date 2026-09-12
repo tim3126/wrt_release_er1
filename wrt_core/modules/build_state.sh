@@ -27,6 +27,19 @@ resolve_release_identity() {
     SOURCE_LOCKS_SHA256=$(sha256sum "$BASE_PATH/source-locks.env" | awk '{print $1}')
     BUILD_CONTAINER_BASE=$(read_ini_by_key "BUILD_TARGET_SDK")
     CURRENT_CONTAINER_IMAGE_ID=${BUILD_CONTAINER_IMAGE_ID:-native}
+    BUILD_CONTAINER_IMAGE_REF=${BUILD_CONTAINER_IMAGE_REF:-not-applicable}
+    BUILD_CONTAINER_MANIFEST_DIGEST=${BUILD_CONTAINER_MANIFEST_DIGEST:-not-applicable}
+
+    if [[ $BUILD_CONTAINER_IMAGE_REF == not-applicable \
+        && $BUILD_CONTAINER_MANIFEST_DIGEST == not-applicable ]]; then
+        return 0
+    fi
+    if [[ ! $BUILD_CONTAINER_IMAGE_REF =~ @sha256:[0-9a-f]{64}$ ]] \
+        || [[ ! $BUILD_CONTAINER_MANIFEST_DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || [[ ${BUILD_CONTAINER_IMAGE_REF##*@} != "$BUILD_CONTAINER_MANIFEST_DIGEST" ]]; then
+        echo "Error: audited builder reference and manifest digest must be matching immutable OCI values." >&2
+        return 1
+    fi
 }
 
 build_state_value() {
@@ -196,10 +209,25 @@ write_build_state() {
     local config_sha256
     local prepared_source_sha256
     local apk_build_public_key_sha256
+    local build_container_image_ref
+    local build_container_manifest_digest
+    local taiyi_plugin_feed_catalog_sha256
+    local taiyi_plugin_feed_allowlist_sha256
+    local taiyi_plugin_feed_policy_version_sha256
+    local taiyi_plugin_feed_index_url
+    local taiyi_plugin_feed_public_key_sha256
 
     config_sha256=$(sha256sum "$source_dir/.config" | awk '{print $1}')
+    taiyi_plugin_feed_load_config || return 1
+    taiyi_plugin_feed_catalog_sha256=$(taiyi_plugin_feed_catalog_sha256)
+    taiyi_plugin_feed_allowlist_sha256=$(taiyi_plugin_feed_allowlist_sha256)
+    taiyi_plugin_feed_policy_version_sha256=$(taiyi_plugin_feed_policy_version_sha256)
+    taiyi_plugin_feed_index_url=${TAIYI_PLUGIN_FEED_INDEX_URL:-not-enabled}
+    taiyi_plugin_feed_public_key_sha256=${TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256:-not-enabled}
     validate_apk_build_key_pair "$source_dir"
     apk_build_public_key_sha256=$(apk_build_public_key_sha256 "$source_dir")
+    build_container_image_ref=${BUILD_CONTAINER_IMAGE_REF:-not-applicable}
+    build_container_manifest_digest=${BUILD_CONTAINER_MANIFEST_DIGEST:-not-applicable}
     prepared_source_sha256=$(compute_prepared_source_sha256 "$source_dir")
     cat >"$state_file" <<EOF
 Device: $Dev
@@ -212,7 +240,15 @@ ConfigFragments: $(join_fragments "${EFFECTIVE_CONFIG_FRAGMENTS[@]}")
 ConfigSha256: $config_sha256
 PreparedSourceSha256: $prepared_source_sha256
 ApkBuildPublicKeySha256: $apk_build_public_key_sha256
+TaiyiPluginFeedMode: $TAIYI_PLUGIN_FEED_MODE
+TaiyiPluginFeedIndexUrl: $taiyi_plugin_feed_index_url
+TaiyiPluginFeedPublicKeySha256: $taiyi_plugin_feed_public_key_sha256
+TaiyiPluginFeedCatalogSha256: $taiyi_plugin_feed_catalog_sha256
+TaiyiPluginFeedAllowlistSha256: $taiyi_plugin_feed_allowlist_sha256
+TaiyiPluginPolicyVersionSha256: $taiyi_plugin_feed_policy_version_sha256
 BuildContainerBase: $BUILD_CONTAINER_BASE
+BuildContainerImageRef: $build_container_image_ref
+BuildContainerManifestDigest: $build_container_manifest_digest
 BuildContainerImageId: $CURRENT_CONTAINER_IMAGE_ID
 EOF
 }
@@ -237,6 +273,11 @@ validate_build_state() {
     local source_commit
     local prepared_source_sha256
     local apk_build_public_key_sha256
+    local taiyi_plugin_feed_catalog_sha256
+    local taiyi_plugin_feed_allowlist_sha256
+    local taiyi_plugin_feed_policy_version_sha256
+    local taiyi_plugin_feed_index_url
+    local taiyi_plugin_feed_public_key_sha256
 
     if [[ ! -f "$state_file" ]]; then
         echo "Error: resume requires prepared build state: $state_file" >&2
@@ -247,6 +288,12 @@ validate_build_state() {
     source_commit=$(git -C "$source_dir" rev-parse HEAD)
     validate_apk_build_key_pair "$source_dir"
     apk_build_public_key_sha256=$(apk_build_public_key_sha256 "$source_dir")
+    taiyi_plugin_feed_load_config || return 1
+    taiyi_plugin_feed_catalog_sha256=$(taiyi_plugin_feed_catalog_sha256)
+    taiyi_plugin_feed_allowlist_sha256=$(taiyi_plugin_feed_allowlist_sha256)
+    taiyi_plugin_feed_policy_version_sha256=$(taiyi_plugin_feed_policy_version_sha256)
+    taiyi_plugin_feed_index_url=${TAIYI_PLUGIN_FEED_INDEX_URL:-not-enabled}
+    taiyi_plugin_feed_public_key_sha256=${TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256:-not-enabled}
     prepared_source_sha256=$(compute_prepared_source_sha256 "$source_dir")
     assert_build_state_value "$state_file" "Device" "$Dev" || return 1
     assert_build_state_value "$state_file" "WrtReleaseCommit" "$WRT_RELEASE_COMMIT" || return 1
@@ -258,6 +305,14 @@ validate_build_state() {
     assert_build_state_value "$state_file" "ConfigSha256" "$config_sha256" || return 1
     assert_build_state_value "$state_file" "PreparedSourceSha256" "$prepared_source_sha256" || return 1
     assert_build_state_value "$state_file" "ApkBuildPublicKeySha256" "$apk_build_public_key_sha256" || return 1
+    assert_build_state_value "$state_file" "TaiyiPluginFeedMode" "$TAIYI_PLUGIN_FEED_MODE" || return 1
+    assert_build_state_value "$state_file" "TaiyiPluginFeedIndexUrl" "$taiyi_plugin_feed_index_url" || return 1
+    assert_build_state_value "$state_file" "TaiyiPluginFeedPublicKeySha256" "$taiyi_plugin_feed_public_key_sha256" || return 1
+    assert_build_state_value "$state_file" "TaiyiPluginFeedCatalogSha256" "$taiyi_plugin_feed_catalog_sha256" || return 1
+    assert_build_state_value "$state_file" "TaiyiPluginFeedAllowlistSha256" "$taiyi_plugin_feed_allowlist_sha256" || return 1
+    assert_build_state_value "$state_file" "TaiyiPluginPolicyVersionSha256" "$taiyi_plugin_feed_policy_version_sha256" || return 1
     assert_build_state_value "$state_file" "BuildContainerBase" "$BUILD_CONTAINER_BASE" || return 1
+    assert_build_state_value "$state_file" "BuildContainerImageRef" "${BUILD_CONTAINER_IMAGE_REF:-not-applicable}" || return 1
+    assert_build_state_value "$state_file" "BuildContainerManifestDigest" "${BUILD_CONTAINER_MANIFEST_DIGEST:-not-applicable}" || return 1
     assert_build_state_value "$state_file" "BuildContainerImageId" "$CURRENT_CONTAINER_IMAGE_ID" || return 1
 }

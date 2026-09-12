@@ -1,15 +1,31 @@
 --- a/root/usr/libexec/package-manager-call
 +++ b/root/usr/libexec/package-manager-call
-@@ -8,6 +8,12 @@ else
+@@ -8,6 +8,27 @@ else
  	ipkg_bin="opkg"
  fi
- 
-+# A broad APK upgrade can replace Taiyi's pinned user-space baseline.
-+if [ "$ipkg_bin" = "apk" ] && [ "$action" = "upgrade" ]; then
-+	printf '%s\n' '{"code":2,"stderr":"Full APK upgrades are disabled on Taiyi; use a reviewed firmware sysupgrade."}'
-+	exit 0
+-
++# Taiyi controlled APK plugin transaction guard. The generic LuCI backend must
++# never turn a named request into an unrestricted APK transaction.
++if [ "$ipkg_bin" = "apk" ]; then
++	case "$action" in
++		upgrade)
++			if [ "$#" -eq 0 ]; then
++				printf '%s\n' '{"code":2,"stderr":"Full APK upgrades are disabled on Taiyi; select one reviewed plugin."}'
++				exit 0
++			fi
++			if ! /usr/libexec/taiyi-apk-plugin-policy upgrade "$@" >/dev/null 2>&1; then
++				printf '%s\n' '{"code":2,"stderr":"Taiyi plugin policy rejected this APK transaction."}'
++				exit 0
++			fi
++			printf '%s\n' '{"code":0,"stdout":"Taiyi plugin update completed."}'
++			exit 0
++			;;
++		install|remove|fix)
++			printf '%s\n' '{"code":2,"stderr":"Taiyi only permits reviewed single-plugin upgrades; install, remove and repair actions require a reviewed firmware release."}'
++			exit 0
++			;;
++	esac
 +fi
-+
  case "$action" in
  	list-installed)
  		if [ $ipkg_bin = "apk" ]; then

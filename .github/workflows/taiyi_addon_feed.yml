@@ -1,0 +1,193 @@
+name: Taiyi Add-on Feed
+run-name: Add-on feed ${{ inputs.operation }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Validate a build-input artifact or sign an existing add-on candidate
+        required: true
+        type: choice
+        default: candidate
+        options:
+          - candidate
+          - publish
+      build_run_id:
+        description: Successful Build WRT run ID; required only for candidate
+        required: false
+        type: string
+        default: ""
+      candidate_run_id:
+        description: Successful Taiyi Add-on Feed candidate run ID; required only for publish
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: taiyi-addon-feed-${{ inputs.operation }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    if: ${{ inputs.operation == 'candidate' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+
+    steps:
+      - name: Checkout Candidate Verifier Revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Verify Explicit Build Run Origin
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ $BUILD_RUN_ID =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" >build-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            '.conclusion == "success" and .event == "workflow_dispatch" and .name == "Build WRT" and .head_repository.full_name == $repository and .head_sha == $commit' \
+            build-run.json >/dev/null
+
+      - name: Download Exact Build Input Artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: taiyi-plugin-feed-candidate-jdcloud_er1_libwrt
+          path: addon-build-input
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify Unsigned Candidate Plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/taiyi-build/addon-feed-plan.py verify --candidate addon-build-input
+          grep -qFx "WrtReleaseCommit: $GITHUB_SHA" addon-build-input/FIRMWARE_BUILD_PROVENANCE.txt
+          grep -qFx 'WrtReleaseTreeState: clean' addon-build-input/FIRMWARE_BUILD_PROVENANCE.txt
+          grep -qFx 'TaiyiPluginFeedMode: enabled' addon-build-input/FIRMWARE_BUILD_PROVENANCE.txt
+
+      - name: Upload Verified Unsigned Candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: taiyi-addon-candidate
+          path: addon-build-input/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: ${{ inputs.operation == 'publish' }}
+    runs-on: ubuntu-24.04
+    environment: taiyi-addon-production
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      TAIYI_PLUGIN_FEED_INDEX_URL: ${{ vars.TAIYI_PLUGIN_FEED_INDEX_URL }}
+      TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256: ${{ vars.TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256 }}
+      TAIYI_PLUGIN_FEED_SIGNER_IMAGE: ${{ vars.TAIYI_PLUGIN_FEED_SIGNER_IMAGE }}
+      TAIYI_PLUGIN_FEED_SIGNER_CONFIG_IMAGE_ID: ${{ vars.TAIYI_PLUGIN_FEED_SIGNER_CONFIG_IMAGE_ID }}
+      TAIYI_PLUGIN_FEED_SIGNING_KEY_B64: ${{ secrets.TAIYI_PLUGIN_FEED_SIGNING_KEY_B64 }}
+
+    steps:
+      - name: Checkout Protected Publisher Revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Verify Candidate Run Origin
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ $CANDIDATE_RUN_ID =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" >candidate-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            '.conclusion == "success" and .event == "workflow_dispatch" and .name == "Taiyi Add-on Feed" and .display_title == "Add-on feed candidate" and .head_repository.full_name == $repository and .head_sha == $commit' \
+            candidate-run.json >/dev/null
+
+      - name: Download Exact Candidate Artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: taiyi-addon-candidate
+          path: plugin-feed-candidate
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify, Sign and Stage Immutable Feed Snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ $TAIYI_PLUGIN_FEED_INDEX_URL =~ ^https://[A-Za-z0-9][A-Za-z0-9.-]*/[A-Za-z0-9._~/%+:-]*/packages\.adb$ ]]
+          [[ $TAIYI_PLUGIN_FEED_INDEX_URL != *..* ]]
+          [[ $TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256 =~ ^[0-9a-f]{64}$ ]]
+          [[ $TAIYI_PLUGIN_FEED_SIGNER_IMAGE =~ @sha256:[0-9a-f]{64}$ ]]
+          [[ $TAIYI_PLUGIN_FEED_SIGNER_CONFIG_IMAGE_ID =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ -n $TAIYI_PLUGIN_FEED_SIGNING_KEY_B64 ]]
+
+          tracked_url=$(awk -F= '$1 == "TAIYI_PLUGIN_FEED_INDEX_URL" { print $2; exit }' wrt_core/taiyi-plugin-feed/channel.env)
+          tracked_key_sha256=$(awk -F= '$1 == "TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256" { print $2; exit }' wrt_core/taiyi-plugin-feed/channel.env)
+          [[ $tracked_url == "$TAIYI_PLUGIN_FEED_INDEX_URL" ]]
+          [[ $tracked_key_sha256 == "$TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256" ]]
+          [[ $(sha256sum wrt_core/taiyi-plugin-feed/public-key.pem | awk '{print $1}') == "$tracked_key_sha256" ]]
+          python3 tools/taiyi-build/addon-feed-plan.py verify --candidate plugin-feed-candidate
+          grep -qFx "WrtReleaseCommit: $GITHUB_SHA" plugin-feed-candidate/FIRMWARE_BUILD_PROVENANCE.txt
+          grep -qFx 'WrtReleaseTreeState: clean' plugin-feed-candidate/FIRMWARE_BUILD_PROVENANCE.txt
+          grep -qFx 'TaiyiPluginFeedMode: enabled' plugin-feed-candidate/FIRMWARE_BUILD_PROVENANCE.txt
+          grep -qFx "TaiyiPluginFeedIndexUrl: $tracked_url" plugin-feed-candidate/FIRMWARE_BUILD_PROVENANCE.txt
+          grep -qFx "TaiyiPluginFeedPublicKeySha256: $tracked_key_sha256" plugin-feed-candidate/FIRMWARE_BUILD_PROVENANCE.txt
+
+          docker pull "$TAIYI_PLUGIN_FEED_SIGNER_IMAGE"
+          actual_signer_id=$(docker image inspect --format '{{.Id}}' "$TAIYI_PLUGIN_FEED_SIGNER_IMAGE")
+          [[ $actual_signer_id == "$TAIYI_PLUGIN_FEED_SIGNER_CONFIG_IMAGE_ID" ]]
+
+          umask 077
+          printf '%s' "$TAIYI_PLUGIN_FEED_SIGNING_KEY_B64" | base64 --decode >signing-key.pem
+          chmod 0600 signing-key.pem
+          trap 'rm -f signing-key.pem' EXIT INT TERM
+          mkdir signed-feed-candidate
+
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e ALLOW_TAIYI_PLUGIN_FEED_SIGN=1 \
+            -v "$GITHUB_WORKSPACE/tools/taiyi-build:/tools:ro" \
+            -v "$GITHUB_WORKSPACE/plugin-feed-candidate:/candidate:ro" \
+            -v "$GITHUB_WORKSPACE/signed-feed-candidate:/output" \
+            -v "$GITHUB_WORKSPACE/signing-key.pem:/run/taiyi-plugin-feed.pem:ro" \
+            -v "$GITHUB_WORKSPACE/wrt_core/taiyi-plugin-feed/public-key.pem:/run/taiyi-plugin-feed.pub:ro" \
+            "$TAIYI_PLUGIN_FEED_SIGNER_IMAGE" \
+            bash /tools/publish-plugin-feed.sh sign \
+              --candidate /candidate \
+              --output /output/feed \
+              --apk /usr/bin/apk \
+              --private-key /run/taiyi-plugin-feed.pem \
+              --public-key /run/taiyi-plugin-feed.pub \
+              --index-url "$TAIYI_PLUGIN_FEED_INDEX_URL"
+
+          (cd signed-feed-candidate/feed && sha256sum -c SHA256SUMS)
+
+      - name: Upload Signed Immutable Feed Snapshot Candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: taiyi-signed-plugin-feed-snapshot
+          path: signed-feed-candidate/feed/*
+          if-no-files-found: error
+          retention-days: 14

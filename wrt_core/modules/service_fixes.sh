@@ -131,14 +131,14 @@ restrict_er1_luci_apk_upgrade() {
     local patch_file="$BASE_PATH/patches/002-taiyi-disable-luci-apk-upgrade.patch"
 
     if [[ ! -f "$package_manager_call" || ! -f "$patch_file" ]]; then
-        echo "错误：缺少 Taiyi LuCI APK upgrade 限制输入" >&2
+        echo "错误：缺少 Taiyi LuCI APK plugin policy 输入" >&2
         return 1
     fi
-    if grep -qF 'Full APK upgrades are disabled on Taiyi' "$package_manager_call"; then
+    if grep -qF 'Taiyi controlled APK plugin transaction guard' "$package_manager_call"; then
         return 0
     fi
     patch -d "$package_manager_dir" -p1 --forward --fuzz=0 <"$patch_file"
-    grep -qF 'Full APK upgrades are disabled on Taiyi' "$package_manager_call"
+    grep -qF 'Taiyi controlled APK plugin transaction guard' "$package_manager_call"
 }
 
 

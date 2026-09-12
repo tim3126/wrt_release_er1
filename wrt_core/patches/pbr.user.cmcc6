@@ -1,29 +1,68 @@
 #!/bin/sh
 # China Mobile (CMCC) IPv6 addresses for PBR
 # Data source: https://ispip.clang.cn/cmcc_ipv6.txt
-# shellcheck disable=SC2015,SC3003,SC3060
 TARGET_URL='https://ispip.clang.cn/cmcc_ipv6.txt'
-TARGET_DL_FILE='/var/pbr_tmp_cmcc_ipv6.txt'
+TARGET_DL_FILE="${TARGET_DL_FILE:-/var/pbr_tmp_cmcc_ipv6.txt}"
 TARGET_TABLE='inet fw4'
 TARGET_INTERFACE='wan_cmcc'
 
 _ret=1
+_download_tmp="${TARGET_DL_FILE}.download.$$"
 
 # Check if IPv6 is enabled
 [ "$(uci get pbr.config.ipv6_enabled)" = "1" ] || return 0
 
-mkdir -p "${TARGET_DL_FILE%/*}"
+mkdir -p "${TARGET_DL_FILE%/*}" || return 1
+rm -f "$_download_tmp"
 
-[ -s "$TARGET_DL_FILE" ] || \
-	uclient-fetch --no-check-certificate -qO- "$TARGET_URL" > "$TARGET_DL_FILE"
+# Do not reuse a stale cache: transport or TLS validation failure must leave
+# the nft set unchanged.
+if ! uclient-fetch -qO "$_download_tmp" "$TARGET_URL"; then
+    rm -f "$_download_tmp"
+    return 1
+fi
 
-[ -s "$TARGET_DL_FILE" ] || return 1
-
-# Read IPv6 CIDR addresses (one per line)
-params=$(cat "$TARGET_DL_FILE" | grep -E '^[0-9a-fA-F:]+/[0-9]+$')
-[ -n "$params" ] || return 1
+params=$(
+    awk '
+        /^[0-9A-Fa-f:]+\/[0-9]+$/ {
+            split($0, cidr, "/")
+            if (cidr[2] > 128) {
+                invalid = 1
+                next
+            }
+            if (params != "")
+                params = params ", "
+            params = params tolower(cidr[1]) "/" cidr[2]
+            valid = 1
+            next
+        }
+        { invalid = 1 }
+        END {
+            if (invalid || !valid)
+                exit 1
+            printf "%s", params
+        }
+    ' "$_download_tmp"
+) || {
+    rm -f "$_download_tmp"
+    return 1
+}
 
 nftset="pbr_${TARGET_INTERFACE}_6_dst_ip_user"
-nft "add element $TARGET_TABLE $nftset { ${params//$'\n'/, } }" && _ret=0
+# nft's parser is the authoritative IPv6 syntax validator. Check the complete
+# batch before the real add so malformed input cannot partially populate a set.
+if ! nft -c "add element $TARGET_TABLE $nftset { $params }"; then
+    rm -f "$_download_tmp"
+    return 1
+fi
+if nft "add element $TARGET_TABLE $nftset { $params }"; then
+    mv -f "$_download_tmp" "$TARGET_DL_FILE" || {
+        rm -f "$_download_tmp"
+        return 1
+    }
+    _ret=0
+else
+    rm -f "$_download_tmp"
+fi
 
 return $_ret

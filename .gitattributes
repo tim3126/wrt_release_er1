@@ -1,9 +1,16 @@
+.gitattributes text eol=lf
 *.sh text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 *.config text eol=lf
 *.ini text eol=lf
 *.env text eol=lf
+*.py text eol=lf
+
+# Reviewed non-secret Taiyi plugin-feed inputs and rootfs data.
+wrt_core/taiyi-plugin-feed/channel.env text eol=lf
+wrt_core/taiyi-plugin-feed/allowlist text eol=lf
+wrt_core/patches/taiyi-apk-plugin-feed text eol=lf
 
 # Build-time source patches and extensionless shell helpers copied into firmware images.
 wrt_core/patches/002-taiyi-disable-luci-apk-upgrade.patch text eol=lf
@@ -17,3 +24,10 @@ wrt_core/patches/smp_affinity text eol=lf
 wrt_core/patches/tempinfo text eol=lf
 wrt_core/patches/pbr.user.cmcc text eol=lf
 wrt_core/patches/pbr.user.cmcc6 text eol=lf
+wrt_core/patches/taiyi-apk-plugin-policy text eol=lf
+wrt_core/patches/taiyi-apk-plugin-catalog text eol=lf
+wrt_core/patches/taiyi-apk-plugin-policy-version text eol=lf
+wrt_core/patches/996_capture_taiyi_apk_plugin_baseline text eol=lf
+wrt_core/modules/plugin_feed.sh text eol=lf
+tools/taiyi-build/publish-plugin-feed.sh text eol=lf
+tools/taiyi-build/addon-feed-plan.py text eol=lf

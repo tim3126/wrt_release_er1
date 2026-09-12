@@ -37,6 +37,31 @@ on:
         required: false
         description: Remove default config fragments, comma separated
         default: ""
+      export_plugin_feed_candidate:
+        required: false
+        description: Stage the reviewed Taiyi add-on APK candidate without any signing key
+        type: boolean
+        default: false
+      use_audited_builder:
+        required: false
+        description: Run the Taiyi build inside a pulled, digest-pinned audited builder
+        type: boolean
+        default: false
+      audited_builder_image:
+        required: false
+        description: Immutable OCI image reference ending in @sha256:...
+        type: string
+        default: ""
+      audited_builder_manifest_digest:
+        required: false
+        description: OCI manifest digest matching audited_builder_image
+        type: string
+        default: ""
+      audited_builder_config_image_id:
+        required: false
+        description: Audited local Docker config image ID for the pulled image
+        type: string
+        default: ""
   workflow_call:
     inputs:
       model:
@@ -47,6 +72,26 @@ on:
         type: string
         default: ""
       remove_fragments:
+        required: false
+        type: string
+        default: ""
+      export_plugin_feed_candidate:
+        required: false
+        type: boolean
+        default: false
+      use_audited_builder:
+        required: false
+        type: boolean
+        default: false
+      audited_builder_image:
+        required: false
+        type: string
+        default: ""
+      audited_builder_manifest_digest:
+        required: false
+        type: string
+        default: ""
+      audited_builder_config_image_id:
         required: false
         type: string
         default: ""
@@ -65,6 +110,12 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    env:
+      TAIYI_EXPORT_PLUGIN_FEED_CANDIDATE: ${{ inputs.export_plugin_feed_candidate }}
+      TAIYI_USE_AUDITED_BUILDER: ${{ inputs.use_audited_builder }}
+      TAIYI_AUDITED_BUILDER_IMAGE: ${{ inputs.audited_builder_image }}
+      TAIYI_AUDITED_BUILDER_MANIFEST_DIGEST: ${{ inputs.audited_builder_manifest_digest }}
+      TAIYI_AUDITED_BUILDER_CONFIG_IMAGE_ID: ${{ inputs.audited_builder_config_image_id }}
 
     steps:
       - name: Free Disk Space
@@ -84,6 +135,30 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+
+      - name: Validate Audited Taiyi Builder
+        if: ${{ inputs.model == 'jdcloud_er1_libwrt' && inputs.use_audited_builder }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          image=$TAIYI_AUDITED_BUILDER_IMAGE
+          manifest_digest=$TAIYI_AUDITED_BUILDER_MANIFEST_DIGEST
+          expected_config_id=$TAIYI_AUDITED_BUILDER_CONFIG_IMAGE_ID
+          [[ $image =~ @sha256:[0-9a-f]{64}$ ]]
+          [[ $manifest_digest =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ ${image##*@} == "$manifest_digest" ]]
+          [[ $expected_config_id =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          docker pull "$image"
+          actual_config_id=$(docker image inspect --format '{{.Id}}' "$image")
+          [[ $actual_config_id == "$expected_config_id" ]]
+
+          {
+            printf 'BUILD_CONTAINER_IMAGE_REF=%s\n' "$image"
+            printf 'BUILD_CONTAINER_MANIFEST_DIGEST=%s\n' "$manifest_digest"
+            printf 'BUILD_CONTAINER_IMAGE_ID=%s\n' "$actual_config_id"
+          } >> "$GITHUB_ENV"
 
       - name: Install Build Dependencies
         shell: bash
@@ -145,7 +220,35 @@ jobs:
 
       - name: Build Firmware
         shell: bash
-        run: ./build.sh "${{ inputs.model }}"
+        run: |
+          set -euo pipefail
+
+          if [[ $TAIYI_EXPORT_PLUGIN_FEED_CANDIDATE == true ]]; then
+            export TAIYI_PLUGIN_FEED_STAGE_DIR="$GITHUB_WORKSPACE/plugin-feed-candidate"
+          fi
+
+          if [[ $TAIYI_USE_AUDITED_BUILDER == true ]]; then
+            docker run --rm \
+              --user "$(id -u):$(id -g)" \
+              -v "$GITHUB_WORKSPACE:/build" \
+              -w /build \
+              -e HOME=/tmp \
+              -e ADD_CONFIG_FRAGMENTS \
+              -e REMOVE_CONFIG_FRAGMENTS \
+              -e DOWNLOAD_JOBS \
+              -e BUILD_JOBS \
+              -e TAIYI_PLUGIN_FEED_STAGE_DIR \
+              -e WRT_RELEASE_COMMIT \
+              -e WRT_RELEASE_TREE_STATE \
+              -e WRT_RELEASE_INPUT_SHA256 \
+              -e BUILD_CONTAINER_IMAGE_REF \
+              -e BUILD_CONTAINER_MANIFEST_DIGEST \
+              -e BUILD_CONTAINER_IMAGE_ID \
+              "$TAIYI_AUDITED_BUILDER_IMAGE" \
+              bash -c './build.sh "$1"' -- "${{ inputs.model }}"
+          else
+            ./build.sh "${{ inputs.model }}"
+          fi
 
       - name: Summarize Taiyi Images
         if: ${{ inputs.model == 'jdcloud_er1_libwrt' }}
@@ -164,6 +267,15 @@ jobs:
             echo "Use sysupgrade.bin only for upgrades from a running OpenWrt system."
             echo "factory.bin is for the documented installation or recovery path, not sysupgrade."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Taiyi Plugin Feed Candidate
+        if: ${{ inputs.model == 'jdcloud_er1_libwrt' && inputs.export_plugin_feed_candidate }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: taiyi-plugin-feed-candidate-${{ inputs.model }}
+          path: ./plugin-feed-candidate/*
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload Firmware Candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

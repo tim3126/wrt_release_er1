@@ -1,0 +1,140 @@
+#!/bin/sh
+# Enforces the Taiyi LuCI APK plugin-update policy. This is not a restriction
+# on an administrator using a root shell.
+set -eu
+
+catalog=/usr/share/taiyi/apk-plugin-catalog
+baseline=/etc/taiyi/apk-baseline-packages
+
+reject() {
+    printf '%s\n' "$1" >&2
+    exit 1
+}
+
+is_valid_package_name() {
+    case "$1" in
+        ''|*[!A-Za-z0-9+_.-]*) return 1 ;;
+        -*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+package_class() {
+    awk -v package_name="$1" '
+        $1 !~ /^#/ && $2 == package_name { print $1; exit }
+    ' "$catalog"
+}
+
+is_baseline_package() {
+    grep -qx -- "$1" "$baseline"
+}
+
+is_protected_package() {
+    local package_name=$1
+
+    if is_baseline_package "$package_name"; then
+        return 0
+    fi
+
+    case "$package_name" in
+        apk|apk-*|base-files|busybox|kernel|kernel-*|kmod-*|nss-*|*nss*|*ecm*|\
+        libc|musl|libgcc|libstdcpp*|libubox*|libubus*|libuci*|\
+        procd|procd-*|ubox|ubus|ubus-*|uci|uci-*|rpcd|rpcd-*|\
+        dropbear|dropbear-*|uhttpd|uhttpd-*|luci-base|luci-lib-*|luci-mod-*|\
+        firewall4|fw4|nftables*|netifd|netifd-*|dnsmasq|dnsmasq-*|\
+        ppp|ppp-*|odhcp*|ip-full|ip-tiny|iproute2*|tc*|\
+        ca-bundle|ca-certificates|openwrt-keyring|luci-app-package-manager)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+validate_simulated_plan() {
+    local plan_file=$1
+    local parsed_file=$2
+    local requested_package=$3
+    local line_count
+    local parsed_count
+    local operation
+    local package_name
+
+    if ! awk '
+        /^\([0-9]+\/[0-9]+\)[[:space:]]+/ {
+            if ($2 != "Installing" && $2 != "Upgrading") {
+                exit 2
+            }
+            if ($3 !~ /^[A-Za-z0-9][A-Za-z0-9+_.-]*$/) {
+                exit 3
+            }
+            print $2 " " $3
+        }
+    ' "$plan_file" >"$parsed_file"; then
+        reject 'APK simulation contains an unsupported package operation.'
+    fi
+
+    line_count=$(grep -Ec '^\([0-9]+/[0-9]+\)[[:space:]]+' "$plan_file" || true)
+    parsed_count=$(wc -l <"$parsed_file")
+    if [ "$line_count" -ne "$parsed_count" ]; then
+        reject 'APK simulation output could not be fully verified.'
+    fi
+    if [ "$line_count" -eq 0 ] \
+        && grep -Eq '(^|[[:space:]])(Installing|Upgrading|Downgrading|Removing|Purging|Reinstalling)([[:space:]]|$)' "$plan_file"; then
+        reject 'APK simulation uses an unrecognized transaction format.'
+    fi
+
+    while IFS=' ' read -r operation package_name; do
+        [ -n "$operation" ] || continue
+        if [ "$package_name" != "$requested_package" ]; then
+            reject 'APK simulation would change more than the selected plugin.'
+        fi
+        if is_protected_package "$package_name"; then
+            reject 'APK simulation would modify a protected firmware package.'
+        fi
+    done <"$parsed_file"
+}
+
+main() {
+    local action=${1:-}
+    local package_name
+    local class
+    local plan_file
+    local parsed_file
+
+    [ "$action" = upgrade ] || reject 'Only explicit plugin upgrades are supported.'
+    shift || true
+    [ "$#" -eq 1 ] || reject 'Exactly one plugin package must be selected.'
+
+    package_name=$1
+    is_valid_package_name "$package_name" || reject 'Invalid plugin package name.'
+    [ -r "$catalog" ] || reject 'Taiyi plugin catalog is unavailable.'
+    [ -r "$baseline" ] || reject 'Taiyi firmware baseline is unavailable.'
+
+    class=$(package_class "$package_name")
+    case "$class" in
+        safe|network-critical)
+            ;;
+        firmware-only)
+            reject 'This plugin is firmware-only because it depends on the platform baseline.'
+            ;;
+        *)
+            reject 'This package is not approved for the Taiyi plugin channel.'
+            ;;
+    esac
+
+    plan_file=$(mktemp /tmp/taiyi-apk-plan.XXXXXX)
+    parsed_file=$(mktemp /tmp/taiyi-apk-plan-parsed.XXXXXX)
+    trap 'rm -f "$plan_file" "$parsed_file"' EXIT HUP INT TERM
+
+    if ! /usr/bin/apk --simulate upgrade "$package_name" >"$plan_file" 2>&1; then
+        reject 'APK resolver simulation failed.'
+    fi
+    validate_simulated_plan "$plan_file" "$parsed_file" "$package_name"
+
+    # The matching LuCI request is an explicit maintenance action. APK owns
+    # its transaction lock; this helper never performs broad upgrades.
+    exec /usr/bin/apk upgrade "$package_name"
+}
+
+main "$@"

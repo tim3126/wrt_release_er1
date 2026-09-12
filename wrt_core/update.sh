@@ -48,9 +48,13 @@ validate_source_locks() {
     local variables=(
         NSS_PACKAGES_FEED_COMMIT SQM_SCRIPTS_NSS_FEED_COMMIT
         OPENWRT_BANDIX_FEED_COMMIT LUCI_APP_BANDIX_FEED_COMMIT
-        SMALL_PACKAGE_COMMIT NIKKI_COMMIT EMMC_HEALTH_COMMIT HOMEPROXY_COMMIT
+        SMALL_PACKAGE_COMMIT NIKKI_COMMIT EMMC_HEALTH_COMMIT OAF_COMMIT HOMEPROXY_COMMIT
         GOLANG_COMMIT LUCKY_COMMIT DISKMAN_COMMIT LUCI_LIB_DOCKER_COMMIT
         DOCKERMAN_COMMIT ADGUARDHOME_LUCI_COMMIT PASSWALL_PACKAGES_COMMIT
+    )
+    local sha256_variables=(
+        EASYTIER_AARCH64_RELEASE_SHA256 CUPS_SOURCE_SHA256
+        GEOIP_SOURCE_SHA256 GEOIP_CN_PRIVATE_SHA256
     )
 
     for variable_name in "${variables[@]}"; do
@@ -61,17 +65,18 @@ validate_source_locks() {
         fi
     done
 
-    if [[ ! $GEOIP_LOCKED_VERSION =~ ^[0-9]{12}$ ]]; then
-        echo "错误：$SOURCE_LOCKS_FILE 中的 GEOIP_LOCKED_VERSION 必须是 12 位版本号" >&2
-        exit 1
-    fi
-    for variable_name in GEOIP_SOURCE_SHA256 GEOIP_CN_PRIVATE_SHA256; do
+    for variable_name in "${sha256_variables[@]}"; do
         variable_value=${!variable_name:-}
         if [[ ! $variable_value =~ ^[0-9a-f]{64}$ ]]; then
             echo "错误：$SOURCE_LOCKS_FILE 中的 $variable_name 必须是 64 位小写 SHA-256" >&2
             exit 1
         fi
     done
+
+    if [[ ! $GEOIP_LOCKED_VERSION =~ ^[0-9]{12}$ ]]; then
+        echo "错误：$SOURCE_LOCKS_FILE 中的 GEOIP_LOCKED_VERSION 必须是 12 位版本号" >&2
+        exit 1
+    fi
 }
 
 validate_source_locks
@@ -81,6 +86,7 @@ source "$SCRIPT_DIR/modules/network.sh"
 source "$SCRIPT_DIR/modules/repo.sh"
 source "$SCRIPT_DIR/modules/feeds.sh"
 source "$SCRIPT_DIR/modules/custom_feed.sh"
+source "$SCRIPT_DIR/modules/plugin_feed.sh"
 source "$SCRIPT_DIR/modules/verify.sh"
 source "$SCRIPT_DIR/modules/docker.sh"
 source "$SCRIPT_DIR/modules/cups.sh"

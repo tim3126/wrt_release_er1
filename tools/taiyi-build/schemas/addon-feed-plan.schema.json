@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Taiyi unsigned add-on feed candidate plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["firmware", "packages", "policy", "schema_version", "status", "target"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "unsigned-not-installable"},
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "device", "package_format"],
+      "properties": {
+        "architecture": {"const": "aarch64_cortex-a53"},
+        "device": {"const": "jdcloud_er1_libwrt"},
+        "package_format": {"const": "apk"}
+      }
+    },
+    "firmware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build_provenance_sha256", "config_sha256", "prepared_source_sha256", "source_commit", "source_locks_sha256", "wrt_release_commit", "wrt_release_input_sha256"],
+      "properties": {
+        "build_provenance_sha256": {"$ref": "#/$defs/sha256"},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "prepared_source_sha256": {"$ref": "#/$defs/sha256"},
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_locks_sha256": {"$ref": "#/$defs/sha256"},
+        "wrt_release_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "wrt_release_input_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowlist_sha256", "catalog_sha256", "policy_version_sha256"],
+      "properties": {
+        "allowlist_sha256": {"$ref": "#/$defs/sha256"},
+        "catalog_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_version_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "packages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["class", "filename", "name", "sha256", "size"],
+        "properties": {
+          "class": {"enum": ["safe", "network-critical"]},
+          "filename": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.-]*\\.apk$"},
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.-]*$"},
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "size": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

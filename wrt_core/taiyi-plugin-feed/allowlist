@@ -1,0 +1,3 @@
+# One package name per line. Only catalogued safe or network-critical
+# user-space packages may appear here. Keep this empty until each package and
+# its runtime dependency closure have been audited for the matching firmware.

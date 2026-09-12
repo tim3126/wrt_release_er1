@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+catalog=/usr/share/taiyi/apk-plugin-catalog
+policy_version_file=/usr/share/taiyi/apk-plugin-policy-version
+baseline_dir=/etc/taiyi
+baseline_file=$baseline_dir/apk-baseline-packages
+current_version=$(cat "$policy_version_file")
+temporary_file=$baseline_dir/.apk-baseline-packages.$$
+
+cleanup() {
+    rm -f "$temporary_file"
+}
+trap cleanup EXIT HUP INT TERM
+
+if [ -s "$baseline_file" ] && grep -qx "# policy-version: $current_version" "$baseline_file"; then
+    exit 0
+fi
+
+mkdir -p "$baseline_dir"
+{
+    printf '# policy-version: %s\n' "$current_version"
+    /usr/bin/apk info | LC_ALL=C sort -u | while IFS= read -r package_name; do
+        [ -n "$package_name" ] || continue
+        if ! awk -v package_name="$package_name" '
+            $1 !~ /^#/ && ($1 == "safe" || $1 == "network-critical") && $2 == package_name {
+                found = 1
+            }
+            END { exit !found }
+        ' "$catalog"; then
+            printf '%s\n' "$package_name"
+        fi
+    done
+} >"$temporary_file"
+
+if [ ! -s "$temporary_file" ]; then
+    echo 'Taiyi APK baseline capture produced no package entries.' >&2
+    exit 1
+fi
+chmod 0644 "$temporary_file"
+mv -f "$temporary_file" "$baseline_file"
+trap - EXIT HUP INT TERM
+
+exit 0
