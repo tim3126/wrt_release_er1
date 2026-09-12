@@ -1,27 +1,48 @@
 --- a/root/usr/libexec/package-manager-call
 +++ b/root/usr/libexec/package-manager-call
-@@ -8,6 +8,27 @@ else
+@@ -8,6 +8,48 @@ else
  	ipkg_bin="opkg"
  fi
 -
-+# Taiyi controlled APK plugin transaction guard. The generic LuCI backend must
-+# never turn a named request into an unrestricted APK transaction.
++# Taiyi controlled APK component-group transaction guard. The generic LuCI
++# backend must never turn a named request into an unrestricted APK transaction.
 +if [ "$ipkg_bin" = "apk" ]; then
++	taiyi_reply() {
++		json_init
++		json_add_int code "$1"
++		[ -n "$2" ] && json_add_string "$3" "$2"
++		json_dump
++}
++
++	taiyi_policy_upgrade() {
++		if ! flock -x 9; then
++			printf '%s\n' 'Failed to acquire the LuCI package-manager lock.' >&2
++			return 255
++		fi
++		/usr/libexec/taiyi-apk-plugin-policy upgrade "$@"
++	}
++
 +	case "$action" in
 +		upgrade)
 +			if [ "$#" -eq 0 ]; then
-+				printf '%s\n' '{"code":2,"stderr":"Full APK upgrades are disabled on Taiyi; select one reviewed plugin."}'
++				taiyi_reply 2 'Full APK upgrades are disabled on Taiyi; select one reviewed component.' stderr
 +				exit 0
 +			fi
-+			if ! /usr/libexec/taiyi-apk-plugin-policy upgrade "$@" >/dev/null 2>&1; then
-+				printf '%s\n' '{"code":2,"stderr":"Taiyi plugin policy rejected this APK transaction."}'
-+				exit 0
++			if policy_output=$(taiyi_policy_upgrade "$@" 9>/tmp/ipkg.lock 2>&1); then
++				if [ -z "$policy_output" ]; then
++					policy_output='Taiyi component update completed.'
++				fi
++				taiyi_reply 0 "$policy_output" stdout
++			else
++				if [ -z "$policy_output" ]; then
++					policy_output='Taiyi APK policy rejected this component-group transaction.'
++				fi
++				taiyi_reply 2 "$policy_output" stderr
 +			fi
-+			printf '%s\n' '{"code":0,"stdout":"Taiyi plugin update completed."}'
 +			exit 0
 +			;;
 +		install|remove|fix)
-+			printf '%s\n' '{"code":2,"stderr":"Taiyi only permits reviewed single-plugin upgrades; install, remove and repair actions require a reviewed firmware release."}'
++			taiyi_reply 2 'Taiyi only permits reviewed component-group upgrades; install, remove and repair actions require a reviewed firmware release.' stderr
 +			exit 0
 +			;;
 +	esac

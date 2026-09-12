@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": ["firmware", "packages", "policy", "schema_version", "status", "target"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "status": {"const": "unsigned-not-installable"},
     "target": {
       "type": "object",
@@ -34,10 +34,11 @@
     "policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["allowlist_sha256", "catalog_sha256", "policy_version_sha256"],
+      "required": ["allowlist_sha256", "catalog_sha256", "groups_sha256", "policy_version_sha256"],
       "properties": {
         "allowlist_sha256": {"$ref": "#/$defs/sha256"},
         "catalog_sha256": {"$ref": "#/$defs/sha256"},
+        "groups_sha256": {"$ref": "#/$defs/sha256"},
         "policy_version_sha256": {"$ref": "#/$defs/sha256"}
       }
     },

@@ -16,9 +16,11 @@ entries.
 
 `allowlist` controls the artifacts staged for publication. It must contain only
 one package name per line. Each package must already be classified as `safe` or
-`network-critical` by `patches/taiyi-apk-plugin-catalog`; firmware-only,
-kernel, kmod, NSS, ECM, and dependency packages are rejected. Leave it empty
-until the exact package source and dependency closure are reviewed.
+`network-critical` by `patches/taiyi-apk-plugin-catalog` and belong to exactly
+one closed group in `patches/taiyi-apk-plugin-groups`; firmware-only, kernel,
+kmod, NSS, ECM, and platform packages are rejected. The staged candidate binds
+both policy files by SHA-256. Leave the allowlist empty until the exact package
+source and dependency closure are reviewed.
 
 Never place a private signing key in this directory, the firmware build tree,
 or Git. The protected publisher accepts an externally mounted key only long

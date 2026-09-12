@@ -617,6 +617,7 @@ TAIYI_PLUGIN_FEED_MODE=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedM
 TAIYI_PLUGIN_FEED_INDEX_URL=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedIndexUrl")
 TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedPublicKeySha256")
 TAIYI_PLUGIN_FEED_CATALOG_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedCatalogSha256")
+TAIYI_PLUGIN_FEED_GROUPS_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedGroupsSha256")
 TAIYI_PLUGIN_FEED_ALLOWLIST_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginFeedAllowlistSha256")
 TAIYI_PLUGIN_POLICY_VERSION_SHA256=$(build_state_value "$BUILD_STATE_FILE" "TaiyiPluginPolicyVersionSha256")
 BUILD_CONTAINER_BASE=$(build_state_value "$BUILD_STATE_FILE" "BuildContainerBase")
@@ -647,6 +648,7 @@ TaiyiPluginFeedMode: $TAIYI_PLUGIN_FEED_MODE
 TaiyiPluginFeedIndexUrl: $TAIYI_PLUGIN_FEED_INDEX_URL
 TaiyiPluginFeedPublicKeySha256: $TAIYI_PLUGIN_FEED_PUBLIC_KEY_SHA256
 TaiyiPluginFeedCatalogSha256: $TAIYI_PLUGIN_FEED_CATALOG_SHA256
+TaiyiPluginFeedGroupsSha256: $TAIYI_PLUGIN_FEED_GROUPS_SHA256
 TaiyiPluginFeedAllowlistSha256: $TAIYI_PLUGIN_FEED_ALLOWLIST_SHA256
 TaiyiPluginPolicyVersionSha256: $TAIYI_PLUGIN_POLICY_VERSION_SHA256
 Kernel: ${KERNEL_PATCHVER}${KERNEL_SUFFIX}
@@ -673,6 +675,7 @@ if [[ -n ${TAIYI_PLUGIN_FEED_STAGE_DIR:-} ]]; then
             --source "$source_dir" \
             --packages "$source_dir/bin/packages/aarch64_cortex-a53" \
             --catalog "$BASE_PATH/patches/taiyi-apk-plugin-catalog" \
+            --groups "$BASE_PATH/patches/taiyi-apk-plugin-groups" \
             --allowlist "$BASE_PATH/taiyi-plugin-feed/allowlist" \
             --policy-version "$BASE_PATH/patches/taiyi-apk-plugin-policy-version" \
             --firmware-provenance "$FIRMWARE_DIR/BUILD_PROVENANCE.txt" \

@@ -1,68 +1,59 @@
-# class package-name
-# safe packages are non-routing applications that may be upgraded only through
-# one explicit LuCI package-manager request.
+# Taiyi APK package classification. Format: class package-name
+# safe: low-risk user-space component group; network-critical: user-space group
+# requiring rollback planning; firmware-only: immutable outside sysupgrade.
+safe luci-app-emmc-health
 network-critical ddns-go
 network-critical luci-app-ddns-go
 network-critical luci-i18n-ddns-go-zh-cn
-firmware-only cups
-firmware-only luci-app-cupsd
-firmware-only luci-i18n-cupsd-zh-cn
-safe luci-app-emmc-health
 network-critical vlmcsd
 network-critical luci-app-vlmcsd
 network-critical luci-i18n-vlmcsd-zh-cn
 safe luci-app-autoreboot
 safe luci-app-diskman
-firmware-only samba4
-firmware-only luci-app-samba4
-
-# network-critical packages are never updated automatically. LuCI may submit
-# exactly one explicitly selected package; the simulated transaction still
-# must leave the protected firmware baseline unchanged.
-firmware-only adguardhome
-firmware-only luci-app-adguardhome
-firmware-only luci-i18n-adguardhome-zh-cn
-firmware-only lucky
-firmware-only luci-app-lucky
-firmware-only luci-i18n-lucky-zh-cn
 network-critical frpc
 network-critical luci-app-frpc
 network-critical luci-i18n-frpc-zh-cn
+network-critical cloudflared
+network-critical luci-app-cloudflared
+network-critical luci-i18n-cloudflared-zh-cn
+network-critical sqm-scripts
+network-critical luci-app-sqm
+network-critical luci-i18n-sqm-zh-cn
+firmware-only pbr
+firmware-only luci-app-pbr
+firmware-only luci-i18n-pbr-zh-cn
+firmware-only samba4
+firmware-only samba4-server
+firmware-only luci-app-samba4
+network-critical adguardhome
+network-critical luci-app-adguardhome
+network-critical luci-i18n-adguardhome-zh-cn
+firmware-only lucky
+firmware-only luci-app-lucky
 firmware-only nikki
 firmware-only mihomo-meta
 firmware-only luci-app-nikki
 firmware-only luci-i18n-nikki-zh-cn
+network-critical appfilter
+network-critical luci-app-oaf
+network-critical luci-i18n-oaf-zh-cn
+firmware-only open-app-filter
+firmware-only kmod-oaf
+network-critical luci-app-homeproxy
+network-critical luci-i18n-homeproxy-zh-cn
+network-critical sing-box
 firmware-only easytier
 firmware-only luci-app-easytier
-firmware-only luci-i18n-easytier-zh-cn
-network-critical cloudflared
-network-critical luci-app-cloudflared
-network-critical luci-i18n-cloudflared-zh-cn
 firmware-only miniupnpd
 firmware-only luci-app-upnp
-firmware-only luci-i18n-upnp-zh-cn
-network-critical dockerd
+network-critical cups
+network-critical libcups
+network-critical luci-app-cupsd
+network-critical luci-i18n-cupsd-zh-cn
 network-critical docker
+network-critical dockerd
+network-critical docker-compose
 network-critical luci-app-dockerman
-network-critical sqm-scripts
-network-critical luci-app-sqm
-
-# firmware-only packages are pinned to the tested firmware image. In
-# particular, Nikki/Mihomo install firewall defaults and require kmod contracts;
-# AdGuardHome and Lucky include service lifecycle or architecture-specific
-# binaries; CUPS updates require a matching library/filter closure; EasyTier
-# requires kmod-tun and an architecture-specific release binary; Samba/CUPS
-# need their matching library/filter closures; miniupnpd participates in the
-# firewall/hotplug contract; HomeProxy and OAF depend on tested firewall/kmod
-# contracts; PBR carries Taiyi-specific CMCC helpers.
-firmware-only appfilter
-firmware-only kmod-oaf
-firmware-only luci-app-oaf
-firmware-only luci-i18n-oaf-zh-cn
-firmware-only open-app-filter
-firmware-only luci-app-homeproxy
-firmware-only luci-i18n-homeproxy-zh-cn
-firmware-only pbr
-firmware-only luci-app-pbr
-firmware-only luci-i18n-pbr-zh-cn
-firmware-only luci-lib-docker
+network-critical luci-i18n-dockerman-zh-cn
+network-critical luci-lib-docker
+network-critical ucode-mod-socket

@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  publish-plugin-feed.sh stage --source DIR --packages DIR --catalog FILE --allowlist FILE --policy-version FILE --firmware-provenance FILE --output DIR
+  publish-plugin-feed.sh stage --source DIR --packages DIR --catalog FILE --groups FILE --allowlist FILE --policy-version FILE --firmware-provenance FILE --output DIR
   publish-plugin-feed.sh sign --candidate DIR --output DIR --apk FILE --private-key FILE --public-key FILE --index-url URL
 
 stage requires ALLOW_TAIYI_PLUGIN_FEED_STAGE=1. sign requires
@@ -30,12 +30,19 @@ require_absolute_file() {
 
 is_platform_package() {
     case "$1" in
-        apk|apk-*|base-files|busybox|kernel|kernel-*|kmod-*|nss-*|*nss*|*ecm*|\
-        libc|musl|libgcc|libstdcpp*|libubox*|libubus*|libuci*|\
-        procd|procd-*|ubox|ubus|ubus-*|uci|uci-*|rpcd|rpcd-*|\
-        dropbear|dropbear-*|uhttpd|uhttpd-*|luci-base|luci-lib-*|luci-mod-*|\
-        firewall4|fw4|nftables*|netifd|netifd-*|dnsmasq|dnsmasq-*|\
-        ppp|ppp-*|odhcp*|ip-full|ip-tiny|iproute2*|tc*)
+        kernel|kernel-*|kmod-*|apk|apk-*|openwrt-keyring|openwrt-keyring-*|\
+        libc|musl|musl-*|gcc|gcc-*|libgcc|libgcc-*|libstdc++|libstdc++-*|\
+        base-files|busybox|procd|procd-*|ubus|ubus-*|ubusd|ubusd-*|\
+        uci|uci-*|libuci|libuci-*|libubus|libubus-*|libubox|libubox-*|\
+        libblobmsg-json|libblobmsg-json-*|rpcd|rpcd-*|ucode|\
+        ucode-mod-fs|ucode-mod-ubus|ucode-mod-uci|ucode-mod-uloop|\
+        firewall4|fw4|nftables|nftables-*|netifd|netifd-*|\
+        dnsmasq|dnsmasq-*|odhcpd|odhcpd-*|odhcp6c|odhcp6c-*|\
+        ppp|ppp-*|ip-full|ip-tiny|iproute2|iproute2-*|tc|tc-*|\
+        ca-bundle|ca-certificates|libustream-*|jsonfilter|uhttpd|uhttpd-*|\
+        dropbear|dropbear-*|luci-app-package-manager|\
+        luci-base|luci-compat|luci-mod-*|luci-lib-base|\
+        nss|nss-*|*nss*|qca-nss-*|ecm|ecm-*|*ecm*|kmod-qca-*|kmod-ecm*)
             return 0
             ;;
     esac
@@ -46,12 +53,18 @@ catalog_class() {
     awk -v package_name="$1" '$1 !~ /^#/ && $2 == package_name { print $1; exit }' "$2"
 }
 
+catalog_group() {
+    awk -v package_name="$1" '$1 !~ /^#/ && $2 == package_name { print $1; exit }' "$2"
+}
+
 read_allowlist() {
     local allowlist=$1
     local catalog=$2
+    local groups=$3
     local line
     local package_name
     local class
+    local group
     local -A seen=()
 
     while IFS= read -r line || [[ -n $line ]]; do
@@ -67,7 +80,6 @@ read_allowlist() {
         class=$(catalog_class "$package_name" "$catalog")
         case "$class" in
             safe|network-critical)
-                printf '%s\n' "$package_name"
                 ;;
             firmware-only)
                 fail "firmware-only package cannot enter the add-on feed: $package_name"
@@ -76,6 +88,9 @@ read_allowlist() {
                 fail "allowlist package is absent from the Taiyi runtime catalog: $package_name"
                 ;;
         esac
+        group=$(catalog_group "$package_name" "$groups")
+        [[ -n $group ]] || fail "allowlist package has no Taiyi component group: $package_name"
+        printf '%s\n' "$package_name"
     done <"$allowlist"
 }
 
@@ -83,6 +98,7 @@ stage() {
     local source_dir=
     local packages_dir=
     local catalog=
+    local groups=
     local allowlist=
     local policy_version=
     local firmware_provenance=
@@ -92,6 +108,7 @@ stage() {
     local provenance_value
     local matches
     local package_path
+    local package_list
     local -a packages=()
 
     while [[ $# -gt 0 ]]; do
@@ -99,6 +116,7 @@ stage() {
             --source) source_dir=$2; shift 2 ;;
             --packages) packages_dir=$2; shift 2 ;;
             --catalog) catalog=$2; shift 2 ;;
+            --groups) groups=$2; shift 2 ;;
             --allowlist) allowlist=$2; shift 2 ;;
             --policy-version) policy_version=$2; shift 2 ;;
             --firmware-provenance) firmware_provenance=$2; shift 2 ;;
@@ -112,6 +130,7 @@ stage() {
     require_absolute_dir "$source_dir"
     require_absolute_dir "$packages_dir"
     require_absolute_file "$catalog"
+    require_absolute_file "$groups"
     require_absolute_file "$allowlist"
     require_absolute_file "$policy_version"
     require_absolute_file "$firmware_provenance"
@@ -124,6 +143,8 @@ stage() {
         || fail 'firmware provenance is not a clean-tree build'
     grep -qFx "TaiyiPluginFeedCatalogSha256: $(sha256sum "$catalog" | awk '{print $1}')" "$firmware_provenance" \
         || fail 'firmware provenance does not bind the staged catalog'
+    grep -qFx "TaiyiPluginFeedGroupsSha256: $(sha256sum "$groups" | awk '{print $1}')" "$firmware_provenance" \
+        || fail 'firmware provenance does not bind the staged component groups'
     grep -qFx "TaiyiPluginFeedAllowlistSha256: $(sha256sum "$allowlist" | awk '{print $1}')" "$firmware_provenance" \
         || fail 'firmware provenance does not bind the staged allowlist'
     grep -qFx "TaiyiPluginPolicyVersionSha256: $(sha256sum "$policy_version" | awk '{print $1}')" "$firmware_provenance" \
@@ -135,8 +156,9 @@ stage() {
             || fail "source build state and firmware provenance differ for $provenance_key"
     done
 
-    mapfile -t packages < <(read_allowlist "$allowlist" "$catalog")
-    (( ${#packages[@]} > 0 )) || fail 'add-on feed allowlist is empty'
+    package_list=$(read_allowlist "$allowlist" "$catalog" "$groups")
+    [[ -n $package_list ]] || fail 'add-on feed allowlist is empty'
+    mapfile -t packages <<<"$package_list"
     mkdir -p "$output/packages"
 
     for package_name in "${packages[@]}"; do
@@ -149,6 +171,7 @@ stage() {
 
     printf '%s\n' "${packages[@]}" >"$output/PACKAGES"
     sha256sum "$catalog" | awk '{print $1}' >"$output/CATALOG_SHA256"
+    sha256sum "$groups" | awk '{print $1}' >"$output/GROUPS_SHA256"
     sha256sum "$allowlist" | awk '{print $1}' >"$output/ALLOWLIST_SHA256"
     sha256sum "$policy_version" | awk '{print $1}' >"$output/POLICY_VERSION_SHA256"
     cp "$firmware_provenance" "$output/FIRMWARE_BUILD_PROVENANCE.txt"
@@ -161,6 +184,7 @@ stage() {
     python3 "$(cd "$(dirname "$0")" && pwd)/addon-feed-plan.py" create \
         --candidate "$output" \
         --catalog "$catalog" \
+        --groups "$groups" \
         --allowlist "$allowlist" \
         --policy-version "$policy_version" \
         --firmware-provenance "$firmware_provenance" \
@@ -184,14 +208,14 @@ validate_candidate_input() {
 
     [[ -d $candidate/packages && ! -L $candidate/packages ]] \
         || fail 'candidate package directory is missing or unsafe'
-    for manifest_name in PACKAGES PACKAGE_SHA256SUMS CATALOG_SHA256 ALLOWLIST_SHA256 \
+    for manifest_name in PACKAGES PACKAGE_SHA256SUMS CATALOG_SHA256 GROUPS_SHA256 ALLOWLIST_SHA256 \
         POLICY_VERSION_SHA256 FIRMWARE_BUILD_PROVENANCE.txt ADDON_PLAN.json VALIDATION.json SHA256SUMS; do
         [[ -s $candidate/$manifest_name && ! -L $candidate/$manifest_name ]] \
             || fail "candidate evidence is missing or unsafe: $manifest_name"
     done
     while IFS= read -r manifest_name; do
         case "$manifest_name" in
-            PACKAGES|PACKAGE_SHA256SUMS|CATALOG_SHA256|ALLOWLIST_SHA256|POLICY_VERSION_SHA256|FIRMWARE_BUILD_PROVENANCE.txt|ADDON_PLAN.json|VALIDATION.json|SHA256SUMS|packages)
+            PACKAGES|PACKAGE_SHA256SUMS|CATALOG_SHA256|GROUPS_SHA256|ALLOWLIST_SHA256|POLICY_VERSION_SHA256|FIRMWARE_BUILD_PROVENANCE.txt|ADDON_PLAN.json|VALIDATION.json|SHA256SUMS|packages)
                 ;;
             *)
                 fail "candidate contains an unexpected top-level entry: $manifest_name"
@@ -294,7 +318,7 @@ sign() {
 
     mkdir -p "$output"
     cp "$candidate/PACKAGES" "$candidate/PACKAGE_SHA256SUMS" \
-        "$candidate/CATALOG_SHA256" "$candidate/ALLOWLIST_SHA256" \
+        "$candidate/CATALOG_SHA256" "$candidate/GROUPS_SHA256" "$candidate/ALLOWLIST_SHA256" \
         "$candidate/POLICY_VERSION_SHA256" "$candidate/ADDON_PLAN.json" \
         "$candidate/VALIDATION.json" \
         "$candidate/FIRMWARE_BUILD_PROVENANCE.txt" "$output/"

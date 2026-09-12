@@ -155,6 +155,9 @@ fix_default_set
 cmp -s "$apk_repo_policy" \
     "$BUILD_DIR/package/base-files/files/etc/uci-defaults/995_configure_taiyi_apk_repositories" \
     || fail 'ER1 APK repository policy was not installed'
+cmp -s "$repo_root/wrt_core/patches/taiyi-apk-plugin-groups" \
+    "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-groups" \
+    || fail 'ER1 APK component groups were not installed'
 [[ ! -e $BUILD_DIR/package/base-files/files/etc/uci-defaults/993_disable_unpublished_distfeeds ]] \
     || fail 'ER1 retained the obsolete opkg distfeeds guard'
 [[ ! -e $BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings ]] \
@@ -226,6 +229,9 @@ fi
 
 # No profile may recreate the historical unsigned 24.10-SNAPSHOT fallback.
 service_fixes="$repo_root/wrt_core/modules/service_fixes.sh"
+if grep -qF '\t' "$repo_root/wrt_core/patches/002-taiyi-disable-luci-apk-upgrade.patch"; then
+    fail 'Taiyi LuCI patch contains a literal backslash-t indentation token'
+fi
 if grep -qF '24.10-SNAPSHOT' "$service_fixes"; then
     fail 'unsafe 24.10-SNAPSHOT opkg fallback remains reachable'
 fi
@@ -264,12 +270,13 @@ BUILD_DIR="$tmp/package-manager-build"
 source "$service_fixes"
 restrict_er1_luci_apk_upgrade
 package_manager_call="$package_manager_dir/root/usr/libexec/package-manager-call"
-grep -qF 'Taiyi controlled APK plugin transaction guard' "$package_manager_call" \
+grep -qF 'Taiyi controlled APK component-group transaction guard' "$package_manager_call" \
     || fail 'Taiyi LuCI package manager does not install the controlled plugin guard'
 restrict_er1_luci_apk_upgrade
 
 plugin_test_root="$tmp/taiyi-apk-plugin-policy"
 plugin_catalog="$plugin_test_root/catalog"
+plugin_groups="$plugin_test_root/groups"
 plugin_baseline="$plugin_test_root/etc/apk-baseline-packages"
 plugin_version="$plugin_test_root/version"
 plugin_bin="$plugin_test_root/bin"
@@ -277,14 +284,23 @@ plugin_policy="$plugin_test_root/policy"
 plugin_baseline_init="$plugin_test_root/baseline-init"
 mkdir -p "$plugin_test_root" "$plugin_bin" "$plugin_test_root/etc"
 cp "$repo_root/wrt_core/patches/taiyi-apk-plugin-catalog" "$plugin_catalog"
-printf '1\n' >"$plugin_version"
+cp "$repo_root/wrt_core/patches/taiyi-apk-plugin-groups" "$plugin_groups"
+printf '2\n' >"$plugin_version"
 cat >"$plugin_bin/apk" <<'EOF'
 #!/bin/sh
 set -eu
 
 case "${1:-}" in
     info)
-        printf '%s\n' base-files ddns-go pbr
+        if [ "${2:-}" = -e ]; then
+            case " ${APK_INSTALLED_PACKAGES:-} " in
+                *" ${3:-} "*) exit 0 ;;
+                *) exit 1 ;;
+            esac
+        fi
+        for package_name in ${APK_INSTALLED_PACKAGES:-}; do
+            printf '%s\n' "$package_name"
+        done
         ;;
     --simulate)
         [ "${2:-}" = upgrade ] || exit 2
@@ -292,7 +308,12 @@ case "${1:-}" in
         printf '%s\n' "${APK_SIMULATION_PLAN:-}"
         ;;
     upgrade)
-        printf 'upgrade %s\n' "${2:-}" >>"$APK_EXECUTION_LOG"
+        shift
+        printf 'upgrade' >>"$APK_EXECUTION_LOG"
+        for package_name in "$@"; do
+            printf ' %s' "$package_name" >>"$APK_EXECUTION_LOG"
+        done
+        printf '\n' >>"$APK_EXECUTION_LOG"
         ;;
     *)
         exit 2
@@ -300,11 +321,7 @@ case "${1:-}" in
 esac
 EOF
 chmod 0755 "$plugin_bin/apk"
-sed \
-    -e "s|^catalog=.*|catalog=$plugin_catalog|" \
-    -e "s|^baseline=.*|baseline=$plugin_baseline|" \
-    -e "s|/usr/bin/apk|$plugin_bin/apk|g" \
-    "$repo_root/wrt_core/patches/taiyi-apk-plugin-policy" >"$plugin_policy"
+cp "$repo_root/wrt_core/patches/taiyi-apk-plugin-policy" "$plugin_policy"
 chmod 0755 "$plugin_policy"
 sed \
     -e "s|^catalog=.*|catalog=$plugin_catalog|" \
@@ -314,16 +331,19 @@ sed \
     "$repo_root/wrt_core/patches/996_capture_taiyi_apk_plugin_baseline" >"$plugin_baseline_init"
 chmod 0755 "$plugin_baseline_init"
 APK_EXECUTION_LOG="$plugin_test_root/execution.log"
+APK_INSTALLED_PACKAGES='base-files pbr kmod-oaf appfilter luci-app-oaf luci-i18n-oaf-zh-cn ddns-go luci-app-ddns-go luci-i18n-ddns-go-zh-cn luci-app-adguardhome luci-i18n-adguardhome-zh-cn cups libcups luci-app-cupsd docker dockerd luci-app-dockerman luci-lib-docker luci-app-homeproxy luci-i18n-homeproxy-zh-cn sing-box luci-app-emmc-health'
 : >"$APK_EXECUTION_LOG"
-"$plugin_baseline_init"
-grep -qFx '# policy-version: 1' "$plugin_baseline" \
+APK_INSTALLED_PACKAGES="$APK_INSTALLED_PACKAGES" "$plugin_baseline_init"
+grep -qFx '# policy-version: 2' "$plugin_baseline" \
     || fail 'Taiyi plugin baseline did not record its policy version'
 grep -qFx 'base-files' "$plugin_baseline" \
     || fail 'Taiyi plugin baseline did not protect the firmware base package'
 grep -qFx 'pbr' "$plugin_baseline" \
     || fail 'Taiyi plugin baseline did not protect firmware-only PBR'
-if grep -qFx 'ddns-go' "$plugin_baseline"; then
-    fail 'Taiyi plugin baseline incorrectly froze a reviewed plugin'
+grep -qFx 'kmod-oaf' "$plugin_baseline" \
+    || fail 'Taiyi plugin baseline did not protect kmod-oaf'
+if grep -qFx 'appfilter' "$plugin_baseline" || grep -qFx 'ddns-go' "$plugin_baseline"; then
+    fail 'Taiyi plugin baseline incorrectly froze a reviewed user-space group'
 fi
 
 run_plugin_policy() {
@@ -332,59 +352,110 @@ run_plugin_policy() {
     local status
 
     set +e
+    POLICY_OUTPUT=$(APK_BIN="$plugin_bin/apk" \
+    TAIYI_APK_PLUGIN_CATALOG="$plugin_catalog" \
+    TAIYI_APK_PLUGIN_GROUPS="$plugin_groups" \
+    TAIYI_APK_BASELINE="$plugin_baseline" \
+    APK_INSTALLED_PACKAGES="$APK_INSTALLED_PACKAGES" \
     APK_EXECUTION_LOG="$APK_EXECUTION_LOG" \
     APK_SIMULATION_MODE="$APK_SIMULATION_MODE" \
     APK_SIMULATION_PLAN="$APK_SIMULATION_PLAN" \
-        "$plugin_policy" "$@" >/dev/null 2>&1
+        "$plugin_policy" "$@" 2>&1)
     status=$?
     set -e
     if [[ $expected == success ]]; then
-        [[ $status -eq 0 ]] || fail "Taiyi plugin policy unexpectedly rejected: $*"
+        [[ $status -eq 0 ]] || fail "Taiyi plugin policy unexpectedly rejected: $* ($POLICY_OUTPUT)"
     else
         [[ $status -ne 0 ]] || fail "Taiyi plugin policy unexpectedly accepted: $*"
     fi
 }
 
 APK_SIMULATION_MODE=success
-APK_SIMULATION_PLAN='(1/1) Upgrading ddns-go (1.0-r1) to (1.0-r2)'
-run_plugin_policy success upgrade ddns-go
-grep -qFx 'upgrade ddns-go' "$APK_EXECUTION_LOG" \
-    || fail 'Taiyi plugin policy did not execute the approved single-package upgrade'
+APK_SIMULATION_PLAN='(1/2) Upgrading luci-app-ddns-go (1.0-r1) to (1.0-r2)
+(2/2) Upgrading luci-i18n-ddns-go-zh-cn (1.0-r1) to (1.0-r2)'
+run_plugin_policy success upgrade luci-app-ddns-go luci-i18n-ddns-go-zh-cn
+grep -qFx 'upgrade ddns-go luci-app-ddns-go luci-i18n-ddns-go-zh-cn' "$APK_EXECUTION_LOG" \
+    || fail 'Taiyi plugin policy did not execute the complete installed DDNS-Go group'
 : >"$APK_EXECUTION_LOG"
-APK_SIMULATION_PLAN='(1/2) Upgrading ddns-go (1.0-r1) to (1.0-r2)
+
+APK_SIMULATION_PLAN='(1/2) Upgrading appfilter (4.0-r1) to (4.1-r1)
+(2/2) Upgrading luci-app-oaf (4.0-r1) to (4.1-r1)'
+run_plugin_policy success upgrade luci-app-oaf
+grep -qFx 'upgrade appfilter luci-app-oaf luci-i18n-oaf-zh-cn' "$APK_EXECUTION_LOG" \
+    || fail 'Taiyi plugin policy did not preserve the OAF user-space component group'
+: >"$APK_EXECUTION_LOG"
+APK_SIMULATION_PLAN='(1/3) Upgrading appfilter (4.0-r1) to (4.1-r1)
+(2/3) Upgrading luci-app-oaf (4.0-r1) to (4.1-r1)
+(3/3) Upgrading kmod-oaf (6.12-r1) to (6.12-r2)'
+run_plugin_policy failure upgrade luci-app-oaf
+grep -qF "firmware-bound platform package 'kmod-oaf'" <<<"$POLICY_OUTPUT" \
+    || fail 'Taiyi plugin policy did not identify the rejected OAF kernel module'
+[[ ! -s $APK_EXECUTION_LOG ]] \
+    || fail 'Taiyi plugin policy executed after kmod-oaf entered the plan'
+
+APK_SIMULATION_PLAN='(1/2) Installing adguardhome (0.107-r1)
+(2/2) Upgrading luci-app-adguardhome (1.0-r1) to (1.0-r2)'
+run_plugin_policy success upgrade luci-app-adguardhome
+: >"$APK_EXECUTION_LOG"
+APK_SIMULATION_PLAN='(1/3) Upgrading cups (2.3-r1) to (2.3-r2)
+(2/3) Upgrading luci-app-cupsd (1.0-r1) to (1.0-r2)
+(3/3) Installing luci-i18n-cupsd-zh-cn (1.0-r2)'
+run_plugin_policy success upgrade luci-i18n-cupsd-zh-cn luci-app-cupsd
+grep -qFx 'upgrade cups libcups luci-app-cupsd luci-i18n-cupsd-zh-cn' "$APK_EXECUTION_LOG" \
+    || fail 'Taiyi plugin policy did not permit a same-group suggested translation install'
+: >"$APK_EXECUTION_LOG"
+APK_SIMULATION_PLAN='(1/3) Installing docker-compose (2.0-r1)
+(2/3) Installing ucode-mod-socket (1.0-r1)
+(3/3) Upgrading luci-app-dockerman (1.0-r1) to (1.0-r2)'
+run_plugin_policy success upgrade luci-app-dockerman
+: >"$APK_EXECUTION_LOG"
+
+APK_SIMULATION_PLAN='(1/2) Upgrading luci-app-ddns-go (1.0-r1) to (1.0-r2)
 (2/2) Upgrading base-files (1.0-r1) to (1.0-r2)'
-run_plugin_policy failure upgrade ddns-go
+run_plugin_policy failure upgrade luci-app-ddns-go
 [[ ! -s $APK_EXECUTION_LOG ]] \
     || fail 'Taiyi plugin policy executed after a protected dependency was simulated'
-APK_SIMULATION_PLAN='(1/2) Upgrading ddns-go (1.0-r1) to (1.0-r2)
-(2/2) Upgrading lucky (1.0-r1) to (1.0-r2)'
-run_plugin_policy failure upgrade ddns-go
+for platform_package in kernel kmod-test nss-ecm libc musl procd netifd firewall4 base-files apk openwrt-keyring; do
+    APK_SIMULATION_PLAN="(1/2) Upgrading luci-app-ddns-go (1.0-r1) to (1.0-r2)
+(2/2) Upgrading $platform_package (1.0-r1) to (1.0-r2)"
+    run_plugin_policy failure upgrade luci-app-ddns-go
+    grep -qF "firmware-bound platform package '$platform_package'" <<<"$POLICY_OUTPUT" \
+        || fail "Taiyi plugin policy did not identify protected package: $platform_package"
+done
 [[ ! -s $APK_EXECUTION_LOG ]] \
-    || fail 'Taiyi plugin policy executed after a second catalog plugin was simulated'
-APK_SIMULATION_PLAN='(1/2) Upgrading ddns-go (1.0-r1) to (1.0-r2)
+    || fail 'Taiyi plugin policy executed a platform-package transaction'
+APK_SIMULATION_PLAN='(1/2) Upgrading luci-app-ddns-go (1.0-r1) to (1.0-r2)
+(2/2) Upgrading luci-app-cupsd (1.0-r1) to (1.0-r2)'
+run_plugin_policy failure upgrade luci-app-ddns-go
+APK_SIMULATION_PLAN='(1/2) Upgrading luci-app-ddns-go (1.0-r1) to (1.0-r2)
 (2/2) Installing arbitrary-userland-dependency (1.0-r1)'
-run_plugin_policy failure upgrade ddns-go
-[[ ! -s $APK_EXECUTION_LOG ]] \
-    || fail 'Taiyi plugin policy executed after an unreviewed dependency was simulated'
-APK_SIMULATION_PLAN='Upgrading ddns-go (1.0-r1) to (1.0-r2)'
-run_plugin_policy failure upgrade ddns-go
-APK_SIMULATION_PLAN='(1/1) Downgrading ddns-go (1.0-r2) to (1.0-r1)'
-run_plugin_policy failure upgrade ddns-go
+run_plugin_policy failure upgrade luci-app-ddns-go
+APK_SIMULATION_PLAN='Upgrading luci-app-ddns-go (1.0-r1) to (1.0-r2)'
+run_plugin_policy failure upgrade luci-app-ddns-go
+APK_SIMULATION_PLAN='(1/1) Downgrading luci-app-ddns-go (1.0-r2) to (1.0-r1)'
+run_plugin_policy failure upgrade luci-app-ddns-go
 APK_SIMULATION_MODE=failure
 APK_SIMULATION_PLAN=''
-run_plugin_policy failure upgrade ddns-go
+run_plugin_policy failure upgrade luci-app-ddns-go
 APK_SIMULATION_MODE=success
 APK_SIMULATION_PLAN=''
 : >"$APK_EXECUTION_LOG"
-run_plugin_policy success upgrade ddns-go
-grep -qFx 'upgrade ddns-go' "$APK_EXECUTION_LOG" \
-    || fail 'Taiyi plugin policy did not preserve a no-op single-package request'
+run_plugin_policy success upgrade luci-app-emmc-health
+grep -qFx 'upgrade luci-app-emmc-health' "$APK_EXECUTION_LOG" \
+    || fail 'Taiyi plugin policy did not preserve a no-op reviewed group request'
 APK_SIMULATION_PLAN='(1/1) Upgrading pbr (1.0-r1) to (1.0-r2)'
 run_plugin_policy failure upgrade pbr
+run_plugin_policy failure upgrade kmod-oaf
 run_plugin_policy failure upgrade nikki
 run_plugin_policy failure upgrade miniupnpd
 run_plugin_policy failure upgrade samba4
-run_plugin_policy failure upgrade ddns-go cups
+run_plugin_policy failure upgrade luci-i18n-unknown-zh-cn
+run_plugin_policy failure upgrade luci-i18n-pbr-zh-cn
+run_plugin_policy failure upgrade luci-i18n-cupsd-zh-cn luci-app-ddns-go
+run_plugin_policy failure upgrade luci-app-autoreboot
+grep -qF "requested package 'luci-app-autoreboot' is not installed" <<<"$POLICY_OUTPUT" \
+    || fail 'Taiyi plugin policy did not explain an uninstalled non-translation rejection'
+run_plugin_policy failure upgrade luci-app-ddns-go luci-app-cupsd
 run_plugin_policy failure upgrade
 
 # The patched LuCI backend must use the policy helper instead of falling
@@ -393,20 +464,32 @@ sed -i \
     -e 's@if \[ -f /usr/bin/apk \]; then@if true; then@' \
     -e "s|/usr/libexec/taiyi-apk-plugin-policy|$plugin_policy|" \
     "$package_manager_call"
-APK_SIMULATION_PLAN='(1/1) Upgrading ddns-go (1.0-r1) to (1.0-r2)'
+# Minimal jshn-compatible functions for the backend fixture.
+sed -i '2i\
+_json_fields=""\
+json_init() { _json_fields=""; }\
+json_add_int() { _json_fields="${_json_fields}${_json_fields:+,}\\"$1\\":$2"; }\
+json_add_string() { _json_fields="${_json_fields}${_json_fields:+,}\\"$1\\":\\"$2\\""; }\
+json_dump() { printf "{%s}\\n" "$_json_fields"; }' "$package_manager_call"
+APK_SIMULATION_PLAN='(1/2) Upgrading luci-app-ddns-go (1.0-r1) to (1.0-r2)
+(2/2) Upgrading luci-i18n-ddns-go-zh-cn (1.0-r1) to (1.0-r2)'
 : >"$APK_EXECUTION_LOG"
-backend_output=$(APK_EXECUTION_LOG="$APK_EXECUTION_LOG" \
+backend_output=$(APK_BIN="$plugin_bin/apk" \
+    TAIYI_APK_PLUGIN_CATALOG="$plugin_catalog" \
+    TAIYI_APK_PLUGIN_GROUPS="$plugin_groups" \
+    TAIYI_APK_BASELINE="$plugin_baseline" \
+    APK_INSTALLED_PACKAGES="$APK_INSTALLED_PACKAGES" \
+    APK_EXECUTION_LOG="$APK_EXECUTION_LOG" \
     APK_SIMULATION_MODE="$APK_SIMULATION_MODE" \
     APK_SIMULATION_PLAN="$APK_SIMULATION_PLAN" \
-    sh "$package_manager_call" upgrade ddns-go)
+    sh "$package_manager_call" upgrade luci-i18n-ddns-go-zh-cn luci-app-ddns-go)
 grep -qF '"code":0' <<<"$backend_output" \
-    || fail 'Taiyi LuCI package manager did not report a reviewed plugin update success'
-grep -qFx 'upgrade ddns-go' "$APK_EXECUTION_LOG" \
-    || fail 'Taiyi LuCI package manager did not execute the exact requested package'
-backend_output=$(APK_EXECUTION_LOG="$APK_EXECUTION_LOG" \
-    APK_SIMULATION_MODE="$APK_SIMULATION_MODE" \
-    APK_SIMULATION_PLAN="$APK_SIMULATION_PLAN" \
-    sh "$package_manager_call" upgrade)
+    || fail 'Taiyi LuCI package manager did not report a reviewed group update success'
+grep -qFx 'upgrade ddns-go luci-app-ddns-go luci-i18n-ddns-go-zh-cn' "$APK_EXECUTION_LOG" \
+    || fail 'Taiyi LuCI package manager did not preserve translation-first group forwarding'
+grep -qF 'taiyi_policy_upgrade "$@" 9>/tmp/ipkg.lock' "$package_manager_call" \
+    || fail 'Taiyi LuCI package manager does not lock simulation and execution together'
+backend_output=$(sh "$package_manager_call" upgrade)
 grep -qF 'Full APK upgrades are disabled on Taiyi' <<<"$backend_output" \
     || fail 'Taiyi LuCI package manager did not reject a broad APK upgrade'
 
@@ -861,8 +944,9 @@ cat >"$plugin_stage_root/catalog" <<'EOF'
 safe demo-plugin
 firmware-only protected-plugin
 EOF
+printf 'demo-component demo-plugin\n' >"$plugin_stage_root/groups"
 printf 'demo-plugin\n' >"$plugin_stage_root/allowlist"
-printf '1\n' >"$plugin_stage_root/policy-version"
+printf '2\n' >"$plugin_stage_root/policy-version"
 openssl ecparam -name prime256v1 -genkey -noout -out "$plugin_stage_root/private-key.pem"
 openssl ec -in "$plugin_stage_root/private-key.pem" -pubout \
     -out "$plugin_stage_root/public-key.pem" >/dev/null 2>&1
@@ -883,6 +967,7 @@ SourceLocksSha256: ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 PreparedSourceSha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ConfigSha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 TaiyiPluginFeedCatalogSha256: $(sha256sum "$plugin_stage_root/catalog" | awk '{print $1}')
+TaiyiPluginFeedGroupsSha256: $(sha256sum "$plugin_stage_root/groups" | awk '{print $1}')
 TaiyiPluginFeedAllowlistSha256: $(sha256sum "$plugin_stage_root/allowlist" | awk '{print $1}')
 TaiyiPluginPolicyVersionSha256: $(sha256sum "$plugin_stage_root/policy-version" | awk '{print $1}')
 TaiyiPluginFeedPublicKeySha256: $plugin_stage_key_sha256
@@ -892,6 +977,7 @@ ALLOW_TAIYI_PLUGIN_FEED_STAGE=1 \
         --source "$plugin_stage_root/source" \
         --packages "$plugin_stage_root/packages" \
         --catalog "$plugin_stage_root/catalog" \
+        --groups "$plugin_stage_root/groups" \
         --allowlist "$plugin_stage_root/allowlist" \
         --policy-version "$plugin_stage_root/policy-version" \
         --firmware-provenance "$plugin_stage_root/BUILD_PROVENANCE.txt" \
@@ -900,6 +986,29 @@ ALLOW_TAIYI_PLUGIN_FEED_STAGE=1 \
     || fail 'Taiyi plugin-feed staging did not copy the approved APK'
 grep -qFx 'demo-plugin' "$plugin_stage_root/candidate/PACKAGES" \
     || fail 'Taiyi plugin-feed staging omitted the approved package manifest'
+cp -a "$plugin_stage_root/candidate" "$plugin_stage_root/groups-hash-mismatch"
+printf '%064d\n' 0 >"$plugin_stage_root/groups-hash-mismatch/GROUPS_SHA256"
+(
+    cd "$plugin_stage_root/groups-hash-mismatch"
+    mapfile -d '' -t candidate_files < <(find . -type f ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z)
+    sha256sum "${candidate_files[@]}" >SHA256SUMS
+)
+if python3 "$repo_root/tools/taiyi-build/addon-feed-plan.py" verify \
+    --candidate "$plugin_stage_root/groups-hash-mismatch" >/dev/null 2>&1; then
+    fail 'Taiyi plugin-feed plan accepted a mismatched group-policy hash'
+fi
+cp -a "$plugin_stage_root/candidate" "$plugin_stage_root/provenance-mismatch"
+sed -i 's/^ConfigSha256: b/ConfigSha256: e/' \
+    "$plugin_stage_root/provenance-mismatch/FIRMWARE_BUILD_PROVENANCE.txt"
+(
+    cd "$plugin_stage_root/provenance-mismatch"
+    mapfile -d '' -t candidate_files < <(find . -type f ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z)
+    sha256sum "${candidate_files[@]}" >SHA256SUMS
+)
+if python3 "$repo_root/tools/taiyi-build/addon-feed-plan.py" verify \
+    --candidate "$plugin_stage_root/provenance-mismatch" >/dev/null 2>&1; then
+    fail 'Taiyi plugin-feed plan accepted mismatched firmware provenance'
+fi
 cp -a "$plugin_stage_root/candidate" "$plugin_stage_root/unknown-plan-field"
 sed -i 's/^{/{"unexpected":0,/' "$plugin_stage_root/unknown-plan-field/ADDON_PLAN.json"
 (
@@ -940,7 +1049,8 @@ ALLOW_TAIYI_PLUGIN_FEED_SIGN=1 \
         --public-key "$plugin_stage_root/public-key.pem" \
         --index-url https://packages.example.invalid/taiyi/25.12.2/aarch64_cortex-a53/packages.adb
 [[ -f $plugin_stage_root/signed/demo-plugin-1.0-r1.apk \
-    && -s $plugin_stage_root/signed/packages.adb ]] \
+    && -s $plugin_stage_root/signed/packages.adb \
+    && -s $plugin_stage_root/signed/GROUPS_SHA256 ]] \
     || fail 'Taiyi plugin-feed signer did not emit the exact staged feed files'
 printf 'unapproved\n' >"$plugin_stage_root/candidate/packages/unapproved-1.0-r1.apk"
 if ALLOW_TAIYI_PLUGIN_FEED_SIGN=1 \
@@ -959,6 +1069,7 @@ if ALLOW_TAIYI_PLUGIN_FEED_STAGE=1 \
         --source "$plugin_stage_root/source" \
         --packages "$plugin_stage_root/packages" \
         --catalog "$plugin_stage_root/catalog" \
+        --groups "$plugin_stage_root/groups" \
         --allowlist "$plugin_stage_root/allowlist" \
         --policy-version "$plugin_stage_root/policy-version" \
         --firmware-provenance "$plugin_stage_root/BUILD_PROVENANCE.txt" \

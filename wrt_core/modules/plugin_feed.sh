@@ -96,6 +96,10 @@ taiyi_plugin_feed_catalog_sha256() {
     sha256sum "$BASE_PATH/patches/taiyi-apk-plugin-catalog" | awk '{print $1}'
 }
 
+taiyi_plugin_feed_groups_sha256() {
+    sha256sum "$BASE_PATH/patches/taiyi-apk-plugin-groups" | awk '{print $1}'
+}
+
 taiyi_plugin_feed_allowlist_sha256() {
     sha256sum "$(_taiyi_plugin_feed_dir)/allowlist" | awk '{print $1}'
 }

@@ -237,6 +237,7 @@ verify_er1_rootfs_policy() (
         etc/uci-defaults/996_capture_taiyi_apk_plugin_baseline
         usr/libexec/taiyi-apk-plugin-policy
         usr/share/taiyi/apk-plugin-catalog
+        usr/share/taiyi/apk-plugin-groups
         usr/share/taiyi/apk-plugin-policy-version
     )
     local -a forbidden_paths=(
@@ -290,6 +291,17 @@ verify_er1_rootfs_policy() (
             return 1
         fi
     done
+    if ! cmp -s "$BASE_PATH/patches/taiyi-apk-plugin-policy" \
+            "$rootfs/usr/libexec/taiyi-apk-plugin-policy" \
+        || ! cmp -s "$BASE_PATH/patches/taiyi-apk-plugin-catalog" \
+            "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! cmp -s "$BASE_PATH/patches/taiyi-apk-plugin-groups" \
+            "$rootfs/usr/share/taiyi/apk-plugin-groups" \
+        || ! cmp -s "$BASE_PATH/patches/taiyi-apk-plugin-policy-version" \
+            "$rootfs/usr/share/taiyi/apk-plugin-policy-version"; then
+        echo "Error: packaged Taiyi APK policy differs from reviewed build inputs." >&2
+        return 1
+    fi
 
     taiyi_plugin_feed_load_config || return 1
     plugin_feed_mode=$TAIYI_PLUGIN_FEED_MODE
@@ -337,7 +349,8 @@ verify_er1_rootfs_policy() (
     if LC_ALL=C grep -q $'\r' "$rootfs/etc/uci-defaults/995_configure_taiyi_apk_repositories" \
         || LC_ALL=C grep -q $'\r' "$rootfs/etc/uci-defaults/996_capture_taiyi_apk_plugin_baseline" \
         || LC_ALL=C grep -q $'\r' "$rootfs/usr/libexec/taiyi-apk-plugin-policy" \
-        || LC_ALL=C grep -q $'\r' "$rootfs/usr/share/taiyi/apk-plugin-catalog"; then
+        || LC_ALL=C grep -q $'\r' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || LC_ALL=C grep -q $'\r' "$rootfs/usr/share/taiyi/apk-plugin-groups"; then
         echo "Error: CR byte found in a Taiyi APK policy input." >&2
         return 1
     fi
@@ -360,18 +373,51 @@ verify_er1_rootfs_policy() (
         echo "Error: Taiyi APK plugin catalog is invalid." >&2
         return 1
     fi
-    if ! grep -qF 'if [ "$package_name" != "$requested_package" ]; then' \
-        "$rootfs/usr/libexec/taiyi-apk-plugin-policy"; then
-        echo "Error: Taiyi APK plugin policy does not enforce exact package plans." >&2
+    if ! awk '
+        NR == FNR {
+            if ($1 !~ /^#/ && NF != 0)
+                catalog[$2] = $1
+            next
+        }
+        /^#/ || NF == 0 { next }
+        NF != 2 { invalid = 1; next }
+        $1 !~ /^[a-z0-9][a-z0-9-]*$/ { invalid = 1 }
+        $2 !~ /^[A-Za-z0-9][A-Za-z0-9+_.-]*$/ { invalid = 1 }
+        !($2 in catalog) || catalog[$2] == "firmware-only" { invalid = 1 }
+        ++member_seen[$2] != 1 { invalid = 1 }
+        !($1 in group_seen) { group_seen[$1] = 1; ++group_count }
+        END {
+            for (package_name in catalog)
+                if (catalog[package_name] != "firmware-only" && !(package_name in member_seen))
+                    invalid = 1
+            exit invalid || group_count == 0
+        }
+    ' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        "$rootfs/usr/share/taiyi/apk-plugin-groups"; then
+        echo "Error: Taiyi APK component group policy is invalid." >&2
+        return 1
+    fi
+    if ! grep -qF 'solver plan crosses component group via' \
+        "$rootfs/usr/libexec/taiyi-apk-plugin-policy" \
+        || ! grep -qF "solver plan includes firmware-bound platform package" \
+            "$rootfs/usr/libexec/taiyi-apk-plugin-policy"; then
+        echo "Error: Taiyi APK plugin policy does not enforce closed component groups." >&2
         return 1
     fi
     if ! grep -qFx 'firmware-only pbr' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
         || ! grep -qFx 'firmware-only nikki' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
         || ! grep -qFx 'firmware-only miniupnpd' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
         || ! grep -qFx 'firmware-only samba4' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
-        || ! grep -qFx 'firmware-only kmod-oaf' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
-        || ! grep -qFx 'firmware-only luci-lib-docker' "$rootfs/usr/share/taiyi/apk-plugin-catalog"; then
+        || ! grep -qFx 'firmware-only kmod-oaf' "$rootfs/usr/share/taiyi/apk-plugin-catalog"; then
         echo "Error: Taiyi APK plugin catalog does not protect firmware-only packages." >&2
+        return 1
+    fi
+    if ! grep -qFx 'network-critical appfilter' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'network-critical luci-app-homeproxy' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'network-critical adguardhome' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'network-critical cups' "$rootfs/usr/share/taiyi/apk-plugin-catalog" \
+        || ! grep -qFx 'network-critical luci-app-dockerman' "$rootfs/usr/share/taiyi/apk-plugin-catalog"; then
+        echo "Error: Taiyi APK catalog does not expose the reviewed user-space groups." >&2
         return 1
     fi
 

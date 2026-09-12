@@ -212,6 +212,7 @@ write_build_state() {
     local build_container_image_ref
     local build_container_manifest_digest
     local taiyi_plugin_feed_catalog_sha256
+    local taiyi_plugin_feed_groups_sha256
     local taiyi_plugin_feed_allowlist_sha256
     local taiyi_plugin_feed_policy_version_sha256
     local taiyi_plugin_feed_index_url
@@ -220,6 +221,7 @@ write_build_state() {
     config_sha256=$(sha256sum "$source_dir/.config" | awk '{print $1}')
     taiyi_plugin_feed_load_config || return 1
     taiyi_plugin_feed_catalog_sha256=$(taiyi_plugin_feed_catalog_sha256)
+    taiyi_plugin_feed_groups_sha256=$(taiyi_plugin_feed_groups_sha256)
     taiyi_plugin_feed_allowlist_sha256=$(taiyi_plugin_feed_allowlist_sha256)
     taiyi_plugin_feed_policy_version_sha256=$(taiyi_plugin_feed_policy_version_sha256)
     taiyi_plugin_feed_index_url=${TAIYI_PLUGIN_FEED_INDEX_URL:-not-enabled}
@@ -244,6 +246,7 @@ TaiyiPluginFeedMode: $TAIYI_PLUGIN_FEED_MODE
 TaiyiPluginFeedIndexUrl: $taiyi_plugin_feed_index_url
 TaiyiPluginFeedPublicKeySha256: $taiyi_plugin_feed_public_key_sha256
 TaiyiPluginFeedCatalogSha256: $taiyi_plugin_feed_catalog_sha256
+TaiyiPluginFeedGroupsSha256: $taiyi_plugin_feed_groups_sha256
 TaiyiPluginFeedAllowlistSha256: $taiyi_plugin_feed_allowlist_sha256
 TaiyiPluginPolicyVersionSha256: $taiyi_plugin_feed_policy_version_sha256
 BuildContainerBase: $BUILD_CONTAINER_BASE
@@ -274,6 +277,7 @@ validate_build_state() {
     local prepared_source_sha256
     local apk_build_public_key_sha256
     local taiyi_plugin_feed_catalog_sha256
+    local taiyi_plugin_feed_groups_sha256
     local taiyi_plugin_feed_allowlist_sha256
     local taiyi_plugin_feed_policy_version_sha256
     local taiyi_plugin_feed_index_url
@@ -290,6 +294,7 @@ validate_build_state() {
     apk_build_public_key_sha256=$(apk_build_public_key_sha256 "$source_dir")
     taiyi_plugin_feed_load_config || return 1
     taiyi_plugin_feed_catalog_sha256=$(taiyi_plugin_feed_catalog_sha256)
+    taiyi_plugin_feed_groups_sha256=$(taiyi_plugin_feed_groups_sha256)
     taiyi_plugin_feed_allowlist_sha256=$(taiyi_plugin_feed_allowlist_sha256)
     taiyi_plugin_feed_policy_version_sha256=$(taiyi_plugin_feed_policy_version_sha256)
     taiyi_plugin_feed_index_url=${TAIYI_PLUGIN_FEED_INDEX_URL:-not-enabled}
@@ -309,6 +314,7 @@ validate_build_state() {
     assert_build_state_value "$state_file" "TaiyiPluginFeedIndexUrl" "$taiyi_plugin_feed_index_url" || return 1
     assert_build_state_value "$state_file" "TaiyiPluginFeedPublicKeySha256" "$taiyi_plugin_feed_public_key_sha256" || return 1
     assert_build_state_value "$state_file" "TaiyiPluginFeedCatalogSha256" "$taiyi_plugin_feed_catalog_sha256" || return 1
+    assert_build_state_value "$state_file" "TaiyiPluginFeedGroupsSha256" "$taiyi_plugin_feed_groups_sha256" || return 1
     assert_build_state_value "$state_file" "TaiyiPluginFeedAllowlistSha256" "$taiyi_plugin_feed_allowlist_sha256" || return 1
     assert_build_state_value "$state_file" "TaiyiPluginPolicyVersionSha256" "$taiyi_plugin_feed_policy_version_sha256" || return 1
     assert_build_state_value "$state_file" "BuildContainerBase" "$BUILD_CONTAINER_BASE" || return 1

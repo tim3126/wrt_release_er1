@@ -25,6 +25,8 @@ fix_default_set() {
             "$BUILD_DIR/package/base-files/files/usr/libexec/taiyi-apk-plugin-policy"
         install -Dm644 "$BASE_PATH/patches/taiyi-apk-plugin-catalog" \
             "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-catalog"
+        install -Dm644 "$BASE_PATH/patches/taiyi-apk-plugin-groups" \
+            "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-groups"
         install -Dm644 "$BASE_PATH/patches/taiyi-apk-plugin-policy-version" \
             "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-policy-version"
         install -Dm544 "$BASE_PATH/patches/996_capture_taiyi_apk_plugin_baseline" \
@@ -38,6 +40,7 @@ fix_default_set() {
         rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/996_capture_taiyi_apk_plugin_baseline"
         rm -f "$BUILD_DIR/package/base-files/files/usr/libexec/taiyi-apk-plugin-policy"
         rm -f "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-catalog"
+        rm -f "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-groups"
         rm -f "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-policy-version"
         rm -f "$BUILD_DIR/package/base-files/files/usr/share/taiyi/apk-plugin-feed"
         rm -f "$BUILD_DIR/package/base-files/files/etc/apk/keys/taiyi-plugin-feed.pem"
