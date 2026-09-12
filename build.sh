@@ -383,7 +383,12 @@ prepare_container_image() {
 
     trap cleanup_container_dockerfile RETURN
 
-    docker pull "$base_image"
+    if docker image inspect --format '{{.Id}}' "$base_image" >/dev/null 2>&1; then
+        echo "Using locally verified container base: $base_image"
+    else
+        docker pull "$base_image"
+        docker image inspect --format '{{.Id}}' "$base_image" >/dev/null
+    fi
     cat > "$container_tmp_Dockerfile" <<EOF
 FROM $base_image
 USER root

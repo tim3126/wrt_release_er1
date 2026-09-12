@@ -49,6 +49,10 @@ grep -qFx '# CONFIG_PACKAGE_luci-lib-ipkg is not set' "$apk_fragment" \
     || fail 'APK fragment retains the legacy LuCI ipkg library'
 grep -qF 'ApkBuildPublicKeySha256:' "$repo_root/build.sh" \
     || fail 'build provenance omits the APK build public-key fingerprint'
+grep -qF 'Using locally verified container base:' "$repo_root/build.sh" \
+    || fail 'container preparation does not reuse an exact locally available base image'
+grep -qF 'docker pull "$base_image"' "$repo_root/build.sh" \
+    || fail 'container preparation does not pull an unavailable exact base image'
 grep -qF 'etc/apk/keys/public-key.pem' "$repo_root/wrt_core/modules/profile_verify.sh" \
     || fail 'rootfs policy does not require the APK build public key'
 grep -qF 'APK private key leaked into the packaged rootfs' \
