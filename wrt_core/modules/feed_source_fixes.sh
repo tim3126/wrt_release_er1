@@ -373,14 +373,71 @@ fix_oaf_apk_acl_collision() {
 fix_ddns_go_default_config() {
     local custom_feed_dir
     local config_source
+    local init_source
     local makefile_path
+    local named_instance_count
+    local tmp_path
+    local total_instance_count
+    local unnamed_instance_count
 
     custom_feed_dir=$(get_custom_feed_worktree_dir)
     config_source="$custom_feed_dir/ddns-go/file/ddns-go.config"
+    init_source="$custom_feed_dir/ddns-go/file/ddns-go.init"
     makefile_path="$custom_feed_dir/ddns-go/Makefile"
 
     if [ ! -f "$makefile_path" ]; then
         echo "Error: ddns-go Makefile not found: $makefile_path" >&2
+        return 1
+    fi
+    if [ ! -f "$init_source" ]; then
+        echo "Error: ddns-go init script not found: $init_source" >&2
+        return 1
+    fi
+
+    total_instance_count=$(awk '
+        {
+            token_count = split($0, tokens, /[^[:alnum:]_]+/)
+            for (token_index = 1; token_index <= token_count; token_index++)
+                if (tokens[token_index] == "procd_open_instance")
+                    count++
+        }
+        END { print count + 0 }
+    ' "$init_source")
+    unnamed_instance_count=$(grep -Ec '^[[:space:]]*procd_open_instance[[:space:]]*$' "$init_source" || true)
+    named_instance_count=$(grep -Ec '^[[:space:]]*procd_open_instance[[:space:]]+ddns-go[[:space:]]*$' "$init_source" || true)
+    if [[ $total_instance_count -eq 1 && $unnamed_instance_count -eq 1 && $named_instance_count -eq 0 ]]; then
+        tmp_path="$init_source.tmp.$$"
+        if ! awk '
+            /^[[:space:]]*procd_open_instance[[:space:]]*$/ {
+                print "\tprocd_open_instance ddns-go"
+                next
+            }
+            { print }
+        ' "$init_source" >"$tmp_path" \
+            || ! chmod --reference="$init_source" "$tmp_path" \
+            || ! mv -f "$tmp_path" "$init_source"; then
+            rm -f "$tmp_path"
+            return 1
+        fi
+    elif [[ $total_instance_count -ne 1 || $unnamed_instance_count -ne 0 || $named_instance_count -ne 1 ]]; then
+        echo "Error: unsupported DDNS-Go procd instance layout in $init_source" >&2
+        return 1
+    fi
+
+    total_instance_count=$(awk '
+        {
+            token_count = split($0, tokens, /[^[:alnum:]_]+/)
+            for (token_index = 1; token_index <= token_count; token_index++)
+                if (tokens[token_index] == "procd_open_instance")
+                    count++
+        }
+        END { print count + 0 }
+    ' "$init_source")
+    if ! /bin/sh -n "$init_source" \
+        || [[ $total_instance_count -ne 1 ]] \
+        || ! grep -qE '^[[:space:]]*procd_open_instance[[:space:]]+ddns-go[[:space:]]*$' "$init_source" \
+        || grep -qE '^[[:space:]]*procd_open_instance[[:space:]]*$' "$init_source"; then
+        echo "Error: failed to align the DDNS-Go procd instance with LuCI status detection." >&2
         return 1
     fi
 

@@ -713,9 +713,80 @@ run_pbr_helper pbr.user.cmcc6 $'2001:db8::/32\n' success success 0 success
 [[ ! -s $tmp/pbr-helper-fetch.log && ! -s $tmp/pbr-helper-nft.log ]] \
     || fail 'IPv6-disabled helper performed a download or nft operation'
 
+source "$repo_root/wrt_core/modules/feed_source_fixes.sh"
+
+# The custom DDNS-Go init must use the procd instance name expected by the
+# current LuCI status view. Reject unknown layouts instead of hiding drift.
+ddns_go_root="$tmp/ddns-go-procd-instance"
+mkdir -p "$ddns_go_root/ddns-go/file"
+printf '%s\n' \
+    'define Package/ddns-go/install' \
+    $'\t$(INSTALL_BIN) $(CURDIR)/file/ddns-go.init $(1)/etc/init.d/ddns-go' \
+    'endef' \
+    >"$ddns_go_root/ddns-go/Makefile"
+printf '%s\n' \
+    '#!/bin/sh /etc/rc.common' \
+    'USE_PROCD=1' \
+    'start_service() {' \
+    $'\tprocd_open_instance' \
+    $'\tprocd_set_param command /usr/bin/ddns-go' \
+    $'\tprocd_close_instance' \
+    '}' \
+    >"$ddns_go_root/ddns-go/file/ddns-go.init"
+chmod 0755 "$ddns_go_root/ddns-go/file/ddns-go.init"
+get_custom_feed_worktree_dir() { printf '%s\n' "$ddns_go_root"; }
+BASE_PATH="$repo_root/wrt_core"
+fix_ddns_go_default_config
+grep -qE '^[[:space:]]*procd_open_instance[[:space:]]+ddns-go[[:space:]]*$' \
+    "$ddns_go_root/ddns-go/file/ddns-go.init" \
+    || fail 'DDNS-Go init did not receive the LuCI-compatible procd instance name'
+if grep -qE '^[[:space:]]*procd_open_instance[[:space:]]*$' \
+    "$ddns_go_root/ddns-go/file/ddns-go.init"; then
+    fail 'DDNS-Go init retained an unnamed procd instance'
+fi
+/bin/sh -n "$ddns_go_root/ddns-go/file/ddns-go.init"
+grep -qF '$(INSTALL_CONF) $(CURDIR)/file/ddns-go.config $(1)/etc/config/ddns-go' \
+    "$ddns_go_root/ddns-go/Makefile" \
+    || fail 'DDNS-Go default UCI config was not packaged'
+ddns_go_hash_before=$(sha256sum \
+    "$ddns_go_root/ddns-go/Makefile" \
+    "$ddns_go_root/ddns-go/file/ddns-go.config" \
+    "$ddns_go_root/ddns-go/file/ddns-go.init")
+fix_ddns_go_default_config
+[[ $(sha256sum \
+    "$ddns_go_root/ddns-go/Makefile" \
+    "$ddns_go_root/ddns-go/file/ddns-go.config" \
+    "$ddns_go_root/ddns-go/file/ddns-go.init") == "$ddns_go_hash_before" ]] \
+    || fail 'DDNS-Go source compatibility fix is not idempotent'
+assert_ddns_go_layout_rejected() {
+    local description=$1
+    shift
+    printf '%s\n' '#!/bin/sh /etc/rc.common' "$@" \
+        >"$ddns_go_root/ddns-go/file/ddns-go.init"
+    chmod 0755 "$ddns_go_root/ddns-go/file/ddns-go.init"
+    if fix_ddns_go_default_config >/dev/null 2>&1; then
+        fail "DDNS-Go source compatibility fix accepted $description"
+    fi
+}
+assert_ddns_go_layout_rejected 'duplicate named instances' \
+    $'\tprocd_open_instance ddns-go' \
+    $'\tprocd_open_instance ddns-go'
+assert_ddns_go_layout_rejected 'a named instance plus another instance name' \
+    $'\tprocd_open_instance ddns-go' \
+    $'\tprocd_open_instance instance1'
+assert_ddns_go_layout_rejected 'a bare instance plus another instance name' \
+    $'\tprocd_open_instance' \
+    $'\tprocd_open_instance instance1'
+assert_ddns_go_layout_rejected 'a bare instance plus a semicolon-terminated invocation' \
+    $'\tprocd_open_instance' \
+    $'\tprocd_open_instance;'
+assert_ddns_go_layout_rejected 'adjacent same-line invocations' \
+    $'\tprocd_open_instance;procd_open_instance'
+assert_ddns_go_layout_rejected 'an unsupported single instance name' \
+    $'\tprocd_open_instance instance1'
+
 # ER1 APK package versions must omit the upstream LuCI leading "v" while
 # leaving unrelated target packages and their source-version semantics alone.
-source "$repo_root/wrt_core/modules/feed_source_fixes.sh"
 luci_docker_root="$tmp/luci-docker-apk-versions"
 mkdir -p \
     "$luci_docker_root/feeds/luci/libs/luci-lib-docker" \
