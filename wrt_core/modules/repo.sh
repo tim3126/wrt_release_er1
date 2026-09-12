@@ -36,10 +36,12 @@ clean_up() {
 
 
 reset_feeds_conf() {
-    # 所有源码修正都基于远端分支或指定提交的干净状态。
+    # Always reattach before resetting. A previous pinned build leaves HEAD
+    # detached, where a subsequent plain git pull is undefined.
+    git_retry fetch --depth 1 origin "$REPO_BRANCH"
+    git_retry checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
     git_retry reset --hard "origin/$REPO_BRANCH"
     git_retry clean -f -d
-    git_retry pull
     if [[ $COMMIT_HASH != "none" ]]; then
         # A fresh build uses a depth-1 clone, so an older pinned commit is not
         # necessarily present locally. Fetch the exact commit before checkout

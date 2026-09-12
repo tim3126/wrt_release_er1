@@ -8,15 +8,15 @@ get_feeds_path() {
     printf '%s\n' "$feeds_path"
 }
 
-append_feed_if_missing() {
+set_pinned_feed() {
     local feeds_path="$1"
-    local match_pattern="$2"
-    local feed_entry="$3"
+    local feed_name="$2"
+    local feed_url="$3"
+    local feed_commit="$4"
 
-    if ! grep -q "$match_pattern" "$feeds_path"; then
-        [ -z "$(tail -c 1 "$feeds_path")" ] || echo "" >>"$feeds_path"
-        echo "$feed_entry" >>"$feeds_path"
-    fi
+    sed -i "/^src-git[[:space:]]\+$feed_name[[:space:]]/d" "$feeds_path"
+    [ -z "$(tail -c 1 "$feeds_path")" ] || echo "" >>"$feeds_path"
+    printf 'src-git %s %s^%s\n' "$feed_name" "$feed_url" "$feed_commit" >>"$feeds_path"
 }
 
 update_feeds() {
@@ -27,8 +27,10 @@ update_feeds() {
     sed -i '/[[:space:]]small8[[:space:]]/d' "$FEEDS_PATH"
     sed -i '/[[:space:]]custom_feed[[:space:]]/d' "$FEEDS_PATH"
 
-    append_feed_if_missing "$FEEDS_PATH" "openwrt_bandix" "src-git openwrt_bandix https://github.com/timsaya/openwrt-bandix.git;main"
-    append_feed_if_missing "$FEEDS_PATH" "luci_app_bandix" "src-git luci_app_bandix https://github.com/timsaya/luci-app-bandix.git;main"
+    set_pinned_feed "$FEEDS_PATH" "nss_packages" "https://github.com/qosmio/nss-packages.git" "$NSS_PACKAGES_FEED_COMMIT"
+    set_pinned_feed "$FEEDS_PATH" "sqm_scripts_nss" "https://github.com/qosmio/sqm-scripts-nss.git" "$SQM_SCRIPTS_NSS_FEED_COMMIT"
+    set_pinned_feed "$FEEDS_PATH" "openwrt_bandix" "https://github.com/timsaya/openwrt-bandix.git" "$OPENWRT_BANDIX_FEED_COMMIT"
+    set_pinned_feed "$FEEDS_PATH" "luci_app_bandix" "https://github.com/timsaya/luci-app-bandix.git" "$LUCI_APP_BANDIX_FEED_COMMIT"
 
     if [ ! -f "$BUILD_DIR/include/bpf.mk" ]; then
         touch "$BUILD_DIR/include/bpf.mk"

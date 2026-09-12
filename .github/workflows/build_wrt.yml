@@ -8,17 +8,19 @@ on:
         required: true
         description: Device Model
         type: choice
-        default: jdcloud_ipq60xx_immwrt
+        default: jdcloud_er1_libwrt
         options:
           - aliyun_ap8220_immwrt
           - aliyun_ap8220_libwrt
           - cmcc_rax3000m_immwrt
           - gemtek_w1701k_immwrt
           - jdcloud_ax6000_immwrt
+          - jdcloud_er1_libwrt
           - jdcloud_ipq60xx_immwrt
           - jdcloud_ipq60xx_libwrt
           - link_nn6000v2_immwrt
           - linksys_mx4x00_immwrt
+          - n1_immwrt
           - qihoo_360v6_immwrt
           - redmi_ax5_immwrt
           - redmi_ax6_immwrt
@@ -35,19 +37,38 @@ on:
         required: false
         description: Remove default config fragments, comma separated
         default: ""
+  workflow_call:
+    inputs:
+      model:
+        required: true
+        type: string
+      add_fragments:
+        required: false
+        type: string
+        default: ""
+      remove_fragments:
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wrt-build-${{ inputs.model }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  DOWNLOAD_JOBS: "8"
+  BUILD_JOBS: "4"
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Free Disk Space
+        shell: bash
         run: |
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
@@ -56,129 +77,98 @@ jobs:
           sudo rm -rf /usr/share/swift || true
           sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
           docker system prune -af || true
-          sudo -E apt-get autoremove --purge -y || true
-          sudo -E apt-get clean || true
+          sudo apt-get clean || true
           df -hT
 
-      - name: Build System Setup
+      - name: Checkout wrt_release
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Build Dependencies
+        shell: bash
         run: |
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-          sudo -E apt -yqq install dos2unix
-          sudo -E apt -yqq install libfuse-dev
-          sudo -E apt -yqq autoremove --purge
-          sudo -E apt -yqq autoclean
-          sudo -E apt -yqq clean
-          sudo -E systemctl daemon-reload
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ g++-multilib gawk gcc-multilib \
+            gettext git libncurses-dev libssl-dev libelf-dev zlib1g-dev \
+            python3 python3-pyelftools python3-setuptools rsync unzip bzip2 \
+            xz-utils file wget curl patch diffutils subversion swig time \
+            xsltproc zstd device-tree-compiler ccache cmake ninja-build \
+            pkgconf jq dos2unix libfuse-dev
+          sudo apt-get clean
 
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-
-      - name: Set Build Date and Timezone
+      - name: Set Build Metadata
+        id: metadata
+        shell: bash
         env:
           RAW_ADD_CONFIG_FRAGMENTS: ${{ inputs.add_fragments }}
           RAW_REMOVE_CONFIG_FRAGMENTS: ${{ inputs.remove_fragments }}
         run: |
-          sudo -E timedatectl set-timezone "Asia/Shanghai"
-          export BUILD_DATE=$(TZ=UTC-8 date +"%y.%m.%d_%H.%M.%S")
-          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-          sanitize_cache_key_part() { printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_'; }
-          echo "ADD_CONFIG_FRAGMENTS_KEY=$(sanitize_cache_key_part "$RAW_ADD_CONFIG_FRAGMENTS")" >> $GITHUB_ENV
-          echo "REMOVE_CONFIG_FRAGMENTS_KEY=$(sanitize_cache_key_part "$RAW_REMOVE_CONFIG_FRAGMENTS")" >> $GITHUB_ENV
+          build_date=$(TZ=Asia/Shanghai date +"%y.%m.%d_%H.%M.%S")
+          {
+            printf 'BUILD_DATE=%s\n' "$build_date"
+            printf 'WRT_RELEASE_COMMIT=%s\n' "$GITHUB_SHA"
+            printf 'ADD_CONFIG_FRAGMENTS=%s\n' "$RAW_ADD_CONFIG_FRAGMENTS"
+            printf 'REMOVE_CONFIG_FRAGMENTS=%s\n' "$RAW_REMOVE_CONFIG_FRAGMENTS"
+          } >> "$GITHUB_ENV"
+          printf 'build_date=%s\n' "$build_date" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Taiyi Build Invariants
+        if: ${{ inputs.model == 'jdcloud_er1_libwrt' }}
+        shell: bash
+        run: bash tests/taiyi-build-invariants.sh
 
       - name: Pre Clone
-        run: ./wrt_core/pre_clone_action.sh ${{ inputs.model }}
+        shell: bash
+        run: ./wrt_core/pre_clone_action.sh "${{ inputs.model }}"
 
-      - name: Cache Dependencies
-        uses: actions/cache@v6.1.0
+      - name: Cache Downloads and Compiler Objects
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
+            ./action_build/dl
             ./action_build/.ccache
-            ./action_build/staging_dir
-          key: ${{ matrix.os }}-${{ inputs.model }}-${{ hashFiles('**/repo_flag') }}-${{ env.ADD_CONFIG_FRAGMENTS_KEY }}-${{ env.REMOVE_CONFIG_FRAGMENTS_KEY }}-${{ env.BUILD_DATE }}
+          key: ${{ runner.os }}-${{ inputs.model }}-${{ hashFiles('repo_flag', 'build.sh', 'wrt_core/**/*.sh', 'wrt_core/**/*.ini', 'wrt_core/**/*.config', 'wrt_core/patches/**') }}
           restore-keys: |
-            ${{ matrix.os }}-${{ inputs.model }}-${{ hashFiles('**/repo_flag') }}-${{ env.ADD_CONFIG_FRAGMENTS_KEY }}-${{ env.REMOVE_CONFIG_FRAGMENTS_KEY }}-
-            ${{ matrix.os }}-${{ inputs.model }}-${{ hashFiles('**/repo_flag') }}-
+            ${{ runner.os }}-${{ inputs.model }}-
 
-      - name: Refresh the cache
+      - name: Machine Information
+        shell: bash
         run: |
-          if [ -d "./action_build/staging_dir" ]; then
-            find "./action_build/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
-                find "$dir" -type f -exec touch {} +
-            done
-          fi
-
-      - name: Machine Information (Pre-build)
-        run: |
-          echo "=============== Pre-build Snapshot ==============="
-          echo "Time: $(date '+%F %T %Z')"
-          echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
-          echo "Kernel: $(uname -r)"
-          echo "Uptime: $(uptime -p)"
-          echo "=================================================="
-          echo "[CPU]"
-          lscpu | grep -E "Model name|Architecture|CPU\\(s\\)|Thread\\(s\\) per core|Core\\(s\\) per socket|CPU max MHz"
-          echo "=================================================="
-          echo "[Memory]"
+          printf 'Runner: %s (%s/%s)\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+          uname -a
+          nproc
           free -h
-          echo "=================================================="
-          echo "[Disk]"
           df -hT
-          echo "--------------------------------------------------"
-          df -hi
-          echo "=================================================="
-          echo "[Workspace]"
-          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
-          du -sh "${GITHUB_WORKSPACE}" 2>/dev/null || true
-          du -sh ./action_build/.ccache 2>/dev/null || true
-          du -sh ./action_build/staging_dir 2>/dev/null || true
-          du -sh ./firmware 2>/dev/null || true
-          echo "=================================================="
+          printf 'Parallelism: download=%s compile=%s\n' "$DOWNLOAD_JOBS" "$BUILD_JOBS"
 
       - name: Build Firmware
-        env:
-          ADD_CONFIG_FRAGMENTS: ${{ inputs.add_fragments }}
-          REMOVE_CONFIG_FRAGMENTS: ${{ inputs.remove_fragments }}
-        run: ./build.sh ${{ inputs.model }}
+        shell: bash
+        run: ./build.sh "${{ inputs.model }}"
 
-      - name: Delete Old Cache
+      - name: Summarize Taiyi Images
+        if: ${{ inputs.model == 'jdcloud_er1_libwrt' }}
+        shell: bash
         run: |
-          # 获取缓存列表并删除
-          gh cache list --key ${{ matrix.os }}-${{ inputs.model }}-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[] | .key' | while read -r key; do
-            gh cache delete "$key"
-          done
-          # 输出缓存状态
-          echo "========cache status========"
-          echo "ccache: $(du -sh ./action_build/.ccache | cut -f 1)"
-          echo "staging: $(du -sh ./action_build/staging_dir | cut -f 1)"
+          {
+            echo "## Taiyi firmware images"
+            echo
+            echo '```text'
+            find ./firmware -maxdepth 1 -type f \
+              \( -name '*-jdcloud_re-cs-07-squashfs-factory.bin' \
+                 -o -name '*-jdcloud_re-cs-07-squashfs-sysupgrade.bin' \) \
+              -print0 | sort -z | xargs -0r sha256sum
+            echo '```'
+            echo
+            echo "Use sysupgrade.bin only for upgrades from a running OpenWrt system."
+            echo "factory.bin is for the documented installation or recovery path, not sysupgrade."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Machine Information (Post-build)
-        run: |
-          echo "=============== Post-build Snapshot ==============="
-          echo "Time: $(date '+%F %T %Z')"
-          echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
-          echo "Kernel: $(uname -r)"
-          echo "Uptime: $(uptime -p)"
-          echo "===================================================="
-          echo "[CPU]"
-          lscpu | grep -E "Model name|Architecture|CPU\\(s\\)|Thread\\(s\\) per core|Core\\(s\\) per socket|CPU max MHz"
-          echo "===================================================="
-          echo "[Memory]"
-          free -h
-          echo "===================================================="
-          echo "[Disk]"
-          df -hT
-          echo "----------------------------------------------------"
-          df -hi
-          echo "===================================================="
-          echo "[Build Outputs]"
-          du -sh ./action_build/.ccache 2>/dev/null || true
-          du -sh ./action_build/staging_dir 2>/dev/null || true
-          du -sh ./firmware 2>/dev/null || true
-          echo "Firmware file count: $(ls -1 ./firmware 2>/dev/null | wc -l)"
-          echo "===================================================="
-
-      - name: Upload Firmware
-        uses: actions/upload-artifact@v7.0.1
+      - name: Upload Firmware Candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.BUILD_DATE }}_${{ inputs.model }}
-          path: ./firmware/*.*
+          name: firmware-${{ inputs.model }}
+          path: ./firmware/*
+          if-no-files-found: error
+          retention-days: 14

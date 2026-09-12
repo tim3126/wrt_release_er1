@@ -1,268 +1,135 @@
-name: Release WRT
-run-name: Release - ${{ inputs.model || 'jdcloud_er1_libwrt' }}
+name: Release Taiyi Firmware
+run-name: Release - jdcloud_er1_libwrt
 
 on:
-  push:
-    branches:
-      - er1-libwrt-25.12
   workflow_dispatch:
-    inputs:
-      model:
-        required: true
-        description: Device Model
-        type: choice
-        default: jdcloud_er1_libwrt
-        options:
-          - aliyun_ap8220_immwrt
-          - aliyun_ap8220_libwrt
-          - cmcc_rax3000m_immwrt
-          - gemtek_w1701k_immwrt
-          - jdcloud_ax6000_immwrt
-          - jdcloud_er1_libwrt
-          - jdcloud_ipq60xx_immwrt
-          - jdcloud_ipq60xx_libwrt
-          - link_nn6000v2_immwrt
-          - linksys_mx4x00_immwrt
-          - n1_immwrt
-          - qihoo_360v6_immwrt
-          - redmi_ax5_immwrt
-          - redmi_ax6_immwrt
-          - redmi_ax6_libwrt
-          - redmi_ax6000_immwrt21
-          - zn_m2_immwrt
-          - zn_m2_libwrt
-          - x64_immwrt
-      add_fragments:
-        required: false
-        description: Add config fragments, comma separated
-        default: ""
-      remove_fragments:
-        required: false
-        description: Remove default config fragments, comma separated
-        default: ""
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
-env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  BUILD_MODEL: ${{ inputs.model || 'jdcloud_er1_libwrt' }}
+concurrency:
+  group: taiyi-production-release
+  cancel-in-progress: false
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build_wrt.yml
+    with:
+      model: jdcloud_er1_libwrt
+      add_fragments: ""
+      remove_fragments: ""
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: taiyi-production
+    permissions:
+      contents: write
 
     steps:
-      - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/.ghcup || true
-          sudo rm -rf /usr/share/swift || true
-          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
-          docker system prune -af || true
-          sudo -E apt-get autoremove --purge -y || true
-          sudo -E apt-get clean || true
-          df -hT
-
-      - name: Build System Setup
-        run: |
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-          sudo -E apt -yqq install dos2unix
-          sudo -E apt -yqq install libfuse-dev
-          sudo -E apt -yqq autoremove --purge
-          sudo -E apt -yqq autoclean
-          sudo -E apt -yqq clean
-          sudo -E systemctl daemon-reload
-
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-
-      - name: Set Build Date and Timezone
-        env:
-          RAW_ADD_CONFIG_FRAGMENTS: ${{ inputs.add_fragments }}
-          RAW_REMOVE_CONFIG_FRAGMENTS: ${{ inputs.remove_fragments }}
-        run: |
-          sudo -E timedatectl set-timezone "Asia/Shanghai"
-          export BUILD_DATE=$(TZ=UTC-8 date +"%y.%m.%d_%H.%M.%S")
-          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-          sanitize_cache_key_part() { printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_'; }
-          echo "ADD_CONFIG_FRAGMENTS_KEY=$(sanitize_cache_key_part "$RAW_ADD_CONFIG_FRAGMENTS")" >> $GITHUB_ENV
-          echo "REMOVE_CONFIG_FRAGMENTS_KEY=$(sanitize_cache_key_part "$RAW_REMOVE_CONFIG_FRAGMENTS")" >> $GITHUB_ENV
-          export BUILD_SRC=$(awk -F"=" '/REPO_URL/ {print $NF}' "./wrt_core/compilecfg/${{ env.BUILD_MODEL }}.ini")
-          echo "BUILD_SRC=$BUILD_SRC" >> $GITHUB_ENV
-
-      - name: Pre Clone
-        run: ./wrt_core/pre_clone_action.sh ${{ env.BUILD_MODEL }}
-
-      - name: Cache Dependencies
-        uses: actions/cache@v6.1.0
+      - name: Download Verified Firmware
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: |
-            ./action_build/.ccache
-            ./action_build/staging_dir
-          key: ${{ matrix.os }}-${{ env.BUILD_MODEL }}-${{ hashFiles('**/repo_flag') }}-${{ env.ADD_CONFIG_FRAGMENTS_KEY }}-${{ env.REMOVE_CONFIG_FRAGMENTS_KEY }}-${{ env.BUILD_DATE }}
-          restore-keys: |
-            ${{ matrix.os }}-${{ env.BUILD_MODEL }}-${{ hashFiles('**/repo_flag') }}-${{ env.ADD_CONFIG_FRAGMENTS_KEY }}-${{ env.REMOVE_CONFIG_FRAGMENTS_KEY }}-
-            ${{ matrix.os }}-${{ env.BUILD_MODEL }}-${{ hashFiles('**/repo_flag') }}-
+          name: firmware-jdcloud_er1_libwrt
+          path: firmware
 
-      - name: Refresh the cache
+      - name: Prepare Whitelisted Release Assets
+        id: release_metadata
+        shell: bash
         run: |
-          if [ -d "./action_build/staging_dir" ]; then
-            find "./action_build/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
-                find "$dir" -type f -exec touch {} +
-            done
+          set -euo pipefail
+          shopt -s nullglob
+
+          factory_images=(firmware/*-jdcloud_re-cs-07-squashfs-factory.bin)
+          sysupgrade_images=(firmware/*-jdcloud_re-cs-07-squashfs-sysupgrade.bin)
+          all_bin_images=(firmware/*.bin)
+
+          if (( ${#factory_images[@]} != 1 )); then
+            echo "Expected exactly one factory image, found ${#factory_images[@]}." >&2
+            exit 1
           fi
-
-      - name: Machine Information (Pre-build)
-        run: |
-          echo "=============== Pre-build Snapshot ==============="
-          echo "Time: $(date '+%F %T %Z')"
-          echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
-          echo "Kernel: $(uname -r)"
-          echo "Uptime: $(uptime -p)"
-          echo "=================================================="
-          echo "[CPU]"
-          lscpu | grep -E "Model name|Architecture|CPU\\(s\\)|Thread\\(s\\) per core|Core\\(s\\) per socket|CPU max MHz"
-          echo "=================================================="
-          echo "[Memory]"
-          free -h
-          echo "=================================================="
-          echo "[Disk]"
-          df -hT
-          echo "--------------------------------------------------"
-          df -hi
-          echo "=================================================="
-          echo "[Workspace]"
-          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
-          du -sh "${GITHUB_WORKSPACE}" 2>/dev/null || true
-          du -sh ./action_build/.ccache 2>/dev/null || true
-          du -sh ./action_build/staging_dir 2>/dev/null || true
-          du -sh ./firmware 2>/dev/null || true
-          echo "=================================================="
-
-      - name: Build Firmware
-        env:
-          ADD_CONFIG_FRAGMENTS: ${{ inputs.add_fragments }}
-          REMOVE_CONFIG_FRAGMENTS: ${{ inputs.remove_fragments }}
-        run: ./build.sh ${{ env.BUILD_MODEL }}
-
-      - name: Get Kernel Verion
-        run: |
-          # 获取内核版本
-          echo "KVER=$(grep -oP "^kernel.*" ./firmware/*.manifest | grep -oP "[4-6]\.[0-9]{1,3}\.[0-9]{1,3}")" >> $GITHUB_ENV
-
-      - name: Delete Old Cache
-        run: |
-          # 获取缓存列表并删除
-          cache_keys=$(gh cache list --key ${{ matrix.os }}-${{ env.BUILD_MODEL }}-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[].key') || {
-            echo "::warning::无法获取旧缓存列表，跳过缓存清理"
-            cache_keys=""
-          }
-          while IFS= read -r key; do
-            [ -z "$key" ] && continue
-            gh cache delete "$key" || echo "::warning::删除缓存失败，已跳过：$key"
-          done <<< "$cache_keys"
-          # 输出缓存状态
-          echo "========cache status========"
-          echo "ccache: $(du -sh ./action_build/.ccache | cut -f 1)"
-          echo "staging: $(du -sh ./action_build/staging_dir | cut -f 1)"
-
-      - name: Machine Information (Post-build)
-        run: |
-          echo "=============== Post-build Snapshot ==============="
-          echo "Time: $(date '+%F %T %Z')"
-          echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
-          echo "Kernel: $(uname -r)"
-          echo "Uptime: $(uptime -p)"
-          echo "===================================================="
-          echo "[CPU]"
-          lscpu | grep -E "Model name|Architecture|CPU\\(s\\)|Thread\\(s\\) per core|Core\\(s\\) per socket|CPU max MHz"
-          echo "===================================================="
-          echo "[Memory]"
-          free -h
-          echo "===================================================="
-          echo "[Disk]"
-          df -hT
-          echo "----------------------------------------------------"
-          df -hi
-          echo "===================================================="
-          echo "[Build Outputs]"
-          du -sh ./action_build/.ccache 2>/dev/null || true
-          du -sh ./action_build/staging_dir 2>/dev/null || true
-          du -sh ./firmware 2>/dev/null || true
-          echo "Firmware file count: $(ls -1 ./firmware 2>/dev/null | wc -l)"
-          echo "===================================================="
-
-      - name: Package Kmods
-        run: |
-          if [ ! -d "./action_build/bin" ]; then
-            echo "kmod source directory not found: ./action_build/bin" >&2
+          if (( ${#sysupgrade_images[@]} != 1 )); then
+            echo "Expected exactly one sysupgrade image, found ${#sysupgrade_images[@]}." >&2
+            exit 1
+          fi
+          if (( ${#all_bin_images[@]} != 2 )); then
+            echo "Expected only the two Taiyi .bin images, found ${#all_bin_images[@]}." >&2
             exit 1
           fi
 
-          KMOD_LIST=$(mktemp)
-          trap 'rm -f "$KMOD_LIST"' EXIT
-
-          (
-            cd ./action_build/bin
-            find . -type f \( -name "kmod*.ipk" -o -name "kmod*.apk" \) -print | sort > "$KMOD_LIST"
+          release_metadata=(
+            firmware/BUILD_PROVENANCE.txt
+            firmware/libwrt-qualcommax-ipq60xx.manifest
+            firmware/profiles.json
+            firmware/config.buildinfo
+            firmware/feeds.buildinfo
+            firmware/version.buildinfo
           )
-
-          if [ ! -s "$KMOD_LIST" ]; then
-            echo "No kmod packages found under ./action_build/bin" >&2
-            exit 1
-          fi
-
-          kmod_count=$(wc -l < "$KMOD_LIST" | tr -d '[:space:]')
-          archive_name="kmods_${{ env.BUILD_MODEL }}_${KVER:-unknown-kernel}_${BUILD_DATE}.tar.gz"
-          tar -C ./action_build/bin -czf "$archive_name" -T "$KMOD_LIST"
-
-          echo "KMOD_ARCHIVE=$archive_name" >> "$GITHUB_ENV"
-          echo "Packaged $kmod_count kmod packages into $archive_name"
-
-      - name: Package OpenWrt Firmware
-        if: ${{ env.BUILD_MODEL == 'n1_immwrt' }}
-        uses: unifreq/openwrt_packit@8007d3efd49bb42aa20c5755a50af21dc7a438e1
-        env:
-          OPENWRT_ARMVIRT: firmware/*.tar.gz
-          PACKAGE_SOC: s905d
-          KERNEL_VERSION_NAME: 6.6.y
-          WHOAMI: ZqinKing
-
-      - name: Prepare Release Body
-        run: |
-          for package in luci-app-passwall luci-app-mosdns; do
-            if find ./firmware -maxdepth 1 -type f -name '*.manifest' -print0 \
-              | xargs -0r grep -hE "(^|[[:space:]:])${package}([[:space:]:]|$)" > /dev/null; then
-              echo "Forbidden package remains in firmware manifest: ${package}" >&2
+          required_metadata=(
+            firmware/SHA256SUMS
+            "${release_metadata[@]}"
+          )
+          for metadata_file in "${required_metadata[@]}"; do
+            if [[ ! -s $metadata_file ]]; then
+              echo "Required release metadata is missing or empty: $metadata_file" >&2
               exit 1
             fi
           done
 
+          jq -e '
+            (.profiles | type == "object") and
+            (.profiles | length == 1) and
+            (.profiles | has("jdcloud_re-cs-07")) and
+            (.profiles["jdcloud_re-cs-07"].supported_devices == ["jdcloud,re-cs-07"])
+          ' firmware/profiles.json >/dev/null
+
+          expected_container_base='ubuntu:24.04@sha256:a61567bd31828687156d735ea8eb01ba4e37636e225dd6a48ba94136a70d9d61'
+          expected_container_id='sha256:671e57ed9daef17d6a23cd0315d04ed287e3307baf3004f031578069021da98b'
+          grep -qFx "WrtReleaseTreeState: clean" firmware/BUILD_PROVENANCE.txt
+          grep -qFx "BuildContainerBase: $expected_container_base" firmware/BUILD_PROVENANCE.txt
+          grep -qFx "BuildContainerImageId: $expected_container_id" firmware/BUILD_PROVENANCE.txt
+
+          (cd firmware && sha256sum -c SHA256SUMS)
+
+          mkdir -p release-assets
+          cp "${factory_images[0]}" "${sysupgrade_images[0]}" release-assets/
+          cp "${release_metadata[@]}" release-assets/
+          (
+            cd release-assets
+            mapfile -d '' release_files < <(find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -printf '%P\0' | sort -z)
+            sha256sum "${release_files[@]}" >SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+
+          release_date=$(TZ=Asia/Shanghai date +'%Y%m%d-%H%M%S')
+          short_commit=${GITHUB_SHA:0:12}
+          release_tag="taiyi-25.12.2-k6.12.103-r${GITHUB_RUN_NUMBER}-${short_commit}-${release_date}"
+          printf 'release_tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
+
           {
-            echo "Cloud build release"
-            echo "Source: ${{ env.BUILD_SRC }}"
-            echo "Kernel: ${{ env.KVER }}"
-            echo "Wi-Fi password: 12345678"
-            echo "LAN address: 192.168.10.1"
-            echo "KMOD archive: ${KMOD_ARCHIVE}"
-            echo "Plugins:"
-            find ./firmware -maxdepth 1 -type f -name '*.manifest' -print0 \
-              | xargs -0r grep -hoE 'luci-app-[[:alnum:]-]+' \
-              | sort -u
-          } > release_body.txt
-      - name: Release Firmware
-        uses: softprops/action-gh-release@v3.0.1
+            echo "Taiyi / JDCloud RE-CS-07 production firmware"
+            echo
+            echo "Build provenance:"
+            echo '```text'
+            cat firmware/BUILD_PROVENANCE.txt
+            echo '```'
+            echo
+            echo "Firmware images:"
+            echo '```text'
+            sha256sum "${factory_images[0]}" "${sysupgrade_images[0]}"
+            echo '```'
+            echo
+            echo "- Use the sysupgrade image only when upgrading from a running OpenWrt system."
+            echo "- The factory image is for the documented installation or recovery path; do not pass it to sysupgrade."
+            echo "- Verify SHA256 and run sysupgrade -T before any upgrade. Never bypass board checks with sysupgrade -F."
+          } > release_body.md
+
+      - name: Publish Taiyi Release
+        uses: softprops/action-gh-release@2bb465e97f322d3cb2a965294d483e0d26a67aa9 # v3.0.1
         with:
-          tag_name: ${{ env.BUILD_DATE }}_${{ env.BUILD_MODEL }}
-          files: |
-            ${{ env.BUILD_MODEL == 'n1_immwrt' && env.PACKAGED_OUTPUTPATH || './firmware' }}/*.*
-            ./kmods_*.tar.gz
+          tag_name: ${{ steps.release_metadata.outputs.release_tag }}
+          files: release-assets/*
           fail_on_unmatched_files: true
-          body_path: ./release_body.txt
+          body_path: release_body.md

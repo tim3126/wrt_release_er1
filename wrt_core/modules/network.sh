@@ -56,3 +56,19 @@ curl_retry() {
 wget_retry() {
     network_retry wget --tries=3 --waitretry=2 "$@"
 }
+
+checkout_locked_commit() {
+    local repo_dir="$1"
+    local expected_commit="$2"
+    local actual_commit
+
+    if ! git -C "$repo_dir" cat-file -e "$expected_commit^{commit}" 2>/dev/null; then
+        git_retry -C "$repo_dir" fetch --depth 1 origin "$expected_commit"
+    fi
+    git_retry -C "$repo_dir" checkout --detach --quiet "$expected_commit"
+    actual_commit=$(git -C "$repo_dir" rev-parse HEAD)
+    if [[ "$actual_commit" != "$expected_commit" ]]; then
+        echo "错误：$repo_dir 源码提交不匹配：$actual_commit != $expected_commit" >&2
+        return 1
+    fi
+}

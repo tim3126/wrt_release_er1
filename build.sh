@@ -15,6 +15,7 @@ fi
 BASE_PATH=$(cd "$WRT_CORE_PATH" && pwd)
 
 source "$BASE_PATH/modules/profile_verify.sh"
+source "$BASE_PATH/modules/build_state.sh"
 
 REPO_ROOT=$(cd "$BASE_PATH/.." && pwd)
 
@@ -48,7 +49,7 @@ collect_supported_devs() {
 }
 
 print_usage() {
-    echo "Usage: $0 <device> [debug|container|container_debug|config_preview]"
+    echo "Usage: $0 <device> [debug|resume|container_prepare|container|container_debug|container_resume|config_preview]"
     echo "       ./start.sh"
 }
 
@@ -99,10 +100,12 @@ prompt_select_build_mode() {
         echo "Build mode:"
         echo "  1) normal"
         echo "  2) debug"
-        echo "  3) container"
-        echo "  4) container_debug"
-        echo "  5) config_preview"
-        printf "Select build mode (1-5, q to quit): "
+        echo "  3) container_prepare"
+        echo "  4) container"
+        echo "  5) container_debug"
+        echo "  6) container_resume"
+        echo "  7) config_preview"
+        printf "Select build mode (1-7, q to quit): "
 
         if ! read -r input; then
             echo
@@ -126,21 +129,31 @@ prompt_select_build_mode() {
         fi
 
         if [[ "$input" =~ ^[[:space:]]*3[[:space:]]*$ ]]; then
-            Build_Mod="container"
+            Build_Mod="container_prepare"
             return
         fi
 
         if [[ "$input" =~ ^[[:space:]]*4[[:space:]]*$ ]]; then
-            Build_Mod="container_debug"
+            Build_Mod="container"
             return
         fi
 
         if [[ "$input" =~ ^[[:space:]]*5[[:space:]]*$ ]]; then
+            Build_Mod="container_debug"
+            return
+        fi
+
+        if [[ "$input" =~ ^[[:space:]]*6[[:space:]]*$ ]]; then
+            Build_Mod="container_resume"
+            return
+        fi
+
+        if [[ "$input" =~ ^[[:space:]]*7[[:space:]]*$ ]]; then
             Build_Mod="config_preview"
             return
         fi
 
-        echo "Invalid selection. Please enter 1, 2, 3, 4, or 5."
+        echo "Invalid selection. Please enter 1, 2, 3, 4, 5, 6, or 7."
     done
 }
 
@@ -150,7 +163,7 @@ is_interactive_terminal() {
 
 validate_build_mode() {
     case "$Build_Mod" in
-        ""|debug|container|container_debug|config_preview)
+        ""|debug|resume|container_prepare|container|container_debug|container_resume|config_preview)
             return 0
             ;;
         *)
@@ -201,6 +214,37 @@ read_ini_by_key() {
     local key=$1
     awk -F"=" -v key="$key" '$1 == key {print $2}' "$INI_FILE"
 }
+
+resolve_positive_job_count() {
+    local variable_name=$1
+    local default_value=$2
+    local value=${!variable_name:-$default_value}
+
+    if [[ ! $value =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: $variable_name must be a positive integer, got '$value'." >&2
+        exit 1
+    fi
+
+    printf -v "$variable_name" '%d' "$value"
+    export "$variable_name"
+}
+
+resolve_parallel_jobs() {
+    local cpu_count
+    local default_download_jobs
+    local default_build_jobs
+
+    cpu_count=$(nproc)
+    default_download_jobs=$((cpu_count * 2))
+    ((default_download_jobs > 16)) && default_download_jobs=16
+    default_build_jobs=$cpu_count
+    ((default_build_jobs > 8)) && default_build_jobs=8
+
+    resolve_positive_job_count DOWNLOAD_JOBS "$default_download_jobs"
+    resolve_positive_job_count BUILD_JOBS "$default_build_jobs"
+}
+
+resolve_parallel_jobs
 
 CONFIG_FRAGMENT_DIR="$BASE_PATH/deconfig/fragments"
 DEFAULT_CONFIG_FRAGMENTS=()
@@ -326,34 +370,49 @@ prepare_container_image() {
     local base_image=$1
     local image_name=$2
     local container_tmp_Dockerfile
-    local container_default_user
+    local container_context
 
     container_tmp_Dockerfile=$(mktemp Dockerfile.XXXXXX)
+    container_context=$(mktemp -d)
 
     cleanup_container_dockerfile() {
         rm -f "$container_tmp_Dockerfile"
+        rm -rf "$container_context"
     }
 
     trap cleanup_container_dockerfile RETURN
 
     docker pull "$base_image"
-    container_default_user=$(docker run --rm "$base_image" whoami)
     cat > "$container_tmp_Dockerfile" <<EOF
 FROM $base_image
 USER root
-RUN apt-get update && apt-get install -y sudo git jq build-essential cmake g++ clang bison flex libelf-dev libncurses5-dev python3-distutils zlib1g-dev python3 pkg-config libssl-dev
-USER $container_default_user
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    sudo ca-certificates git jq build-essential cmake g++ clang bison flex libelf-dev \
+    libncurses-dev zlib1g-dev python3 python3-pyelftools python3-setuptools \
+    pkg-config libssl-dev rsync unzip bzip2 xz-utils patch diffutils \
+    subversion swig time xsltproc zstd device-tree-compiler ccache \
+    ninja-build gettext gawk gcc-multilib g++-multilib file wget curl \
+    dos2unix libfuse-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+RUN test "$(id -u ubuntu)" = "1000" \
+    && test "$(id -g ubuntu)" = "1000" \
+    && test -d /home/ubuntu
+ENV HOME=/home/ubuntu
+USER ubuntu
 RUN git config --global pull.rebase false
 RUN git config --global advice.detachedHead false
 CMD ["bash", "wrt_core/build_container.sh", "$image_name"]
 EOF
-    docker build -t "$image_name" -f "$container_tmp_Dockerfile" .
+    docker build -t "$image_name" -f "$container_tmp_Dockerfile" "$container_context"
 }
 
 run_container_build() {
     local container_build_mod=$1
+    local container_image_mode=${2:-prepare}
     local build_target_sdk
     local container_name
+    local -a docker_tty_args=()
 
     build_target_sdk=$(read_ini_by_key "BUILD_TARGET_SDK")
 
@@ -364,12 +423,37 @@ run_container_build() {
 
     container_name="$(echo "$Dev" | tr '[:upper:]' '[:lower:]' | tr '/:' '-_')-build-container"
 
-    prepare_container_image "$build_target_sdk" "$container_name"
-    docker run --rm -it \
+    if [[ $container_image_mode == "prepare" ]]; then
+        prepare_container_image "$build_target_sdk" "$container_name"
+    elif [[ $container_image_mode != "reuse" ]]; then
+        echo "Error: unsupported container image mode: $container_image_mode" >&2
+        exit 1
+    fi
+
+    if ! BUILD_CONTAINER_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$container_name" 2>/dev/null); then
+        echo "Error: container image $container_name is unavailable; run container_prepare first." >&2
+        exit 1
+    fi
+    export BUILD_CONTAINER_IMAGE_ID
+    if [[ -z "$BUILD_CONTAINER_IMAGE_ID" ]]; then
+        echo "Error: failed to resolve container image ID for $container_name." >&2
+        exit 1
+    fi
+    if is_interactive_terminal; then
+        docker_tty_args=(-it)
+    fi
+
+    docker run --rm "${docker_tty_args[@]}" \
         -v "$REPO_ROOT":/build \
         -w /build \
         -e ADD_CONFIG_FRAGMENTS \
         -e REMOVE_CONFIG_FRAGMENTS \
+        -e DOWNLOAD_JOBS \
+        -e BUILD_JOBS \
+        -e WRT_RELEASE_COMMIT \
+        -e WRT_RELEASE_TREE_STATE \
+        -e WRT_RELEASE_INPUT_SHA256 \
+        -e BUILD_CONTAINER_IMAGE_ID \
         --shm-size=8g \
         --ipc=shareable \
         --ulimit nofile=65535:65535 \
@@ -389,6 +473,17 @@ remove_uhttpd_dependency() {
     fi
 }
 
+if [[ $Build_Mod == "container_prepare" ]]; then
+    build_target_sdk=$(read_ini_by_key "BUILD_TARGET_SDK")
+    if [[ -z "$build_target_sdk" ]]; then
+        echo "Error: BUILD_TARGET_SDK must be pinned for container_prepare." >&2
+        exit 1
+    fi
+    container_name="$(echo "$Dev" | tr '[:upper:]' '[:lower:]' | tr '/:' '-_')-build-container"
+    prepare_container_image "$build_target_sdk" "$container_name"
+    exit 0
+fi
+
 if [[ $Build_Mod == "container" ]]; then
     run_container_build ""
     exit 0
@@ -396,6 +491,11 @@ fi
 
 if [[ $Build_Mod == "container_debug" ]]; then
     run_container_build "debug"
+    exit 0
+fi
+
+if [[ $Build_Mod == "container_resume" ]]; then
+    run_container_build "resume" "reuse"
     exit 0
 fi
 
@@ -435,15 +535,37 @@ if [[ -d action_build ]]; then
     BUILD_DIR="action_build"
 fi
 
-"$BASE_PATH/update.sh" "$REPO_URL" "$REPO_BRANCH" "$BUILD_DIR" "$COMMIT_HASH" "$THEME_SET" "$CUSTOM_FEED_EXCLUDES"
+source_dir="$BASE_PATH/../$BUILD_DIR"
+resolve_release_identity
+if [[ $Build_Mod == "resume" ]]; then
+    if [[ ! -d "$source_dir/.git" || ! -f "$source_dir/.config" ]]; then
+        echo "Error: resume requires an existing prepared source tree and .config: $source_dir" >&2
+        exit 1
+    fi
 
-apply_config
-print_config_fragment_summary
-remove_uhttpd_dependency
+    actual_commit=$(git -C "$source_dir" rev-parse HEAD)
+    if [[ $actual_commit != "$COMMIT_HASH" ]]; then
+        echo "Error: resume source commit mismatch: expected $COMMIT_HASH, got $actual_commit." >&2
+        exit 1
+    fi
 
-cd "$BASE_PATH/../$BUILD_DIR"
-make defconfig
-verify_selected_profile "$Dev" "$BASE_PATH/../$BUILD_DIR/.config" "$BASE_PATH/../$BUILD_DIR" "$COMMIT_HASH"
+    validate_build_state "$source_dir"
+    print_config_fragment_summary
+    cd "$source_dir"
+    verify_selected_profile "$Dev" "$source_dir/.config" "$source_dir" "$COMMIT_HASH"
+else
+    "$BASE_PATH/update.sh" "$REPO_URL" "$REPO_BRANCH" "$BUILD_DIR" "$COMMIT_HASH" "$THEME_SET" "$CUSTOM_FEED_EXCLUDES" "$Dev"
+
+    apply_config
+    print_config_fragment_summary
+    remove_uhttpd_dependency
+
+    cd "$source_dir"
+    make defconfig
+    verify_selected_profile "$Dev" "$source_dir/.config" "$source_dir" "$COMMIT_HASH"
+    prepare_apk_build_keys "$source_dir"
+    write_build_state "$source_dir"
+fi
 
 if grep -qE "^CONFIG_TARGET_x86_64=y" "$CONFIG_FILE"; then
     DISTFEEDS_PATH="$BASE_PATH/../$BUILD_DIR/package/emortal/default-settings/files/99-distfeeds.conf"
@@ -461,8 +583,9 @@ if [[ -d $TARGET_DIR ]]; then
     find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec rm -f {} +
 fi
 
-make download -j$(($(nproc) * 2))
-make -j$(($(nproc) + 1)) || make -j1 V=s
+echo "Build parallelism: download=$DOWNLOAD_JOBS compile=$BUILD_JOBS"
+make download -j"$DOWNLOAD_JOBS"
+make -j"$BUILD_JOBS"
 
 FIRMWARE_DIR="$BASE_PATH/../firmware"
 \rm -rf "$FIRMWARE_DIR"
@@ -471,13 +594,49 @@ find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi
 find "$TARGET_DIR" -type f \( -name "profiles.json" -o -name "sha256sums" -o -name "config.buildinfo" -o -name "feeds.buildinfo" -o -name "version.buildinfo" \) -exec cp -f {} "$FIRMWARE_DIR/" \;
 \rm -f "$BASE_PATH/../firmware/Packages.manifest" 2>/dev/null
 
+validate_build_state "$source_dir"
+BUILD_STATE_FILE="$source_dir/.wrt-release-build-state"
+WRT_RELEASE_COMMIT=$(build_state_value "$BUILD_STATE_FILE" "WrtReleaseCommit")
+WRT_RELEASE_TREE_STATE=$(build_state_value "$BUILD_STATE_FILE" "WrtReleaseTreeState")
+WRT_RELEASE_INPUT_SHA256=$(build_state_value "$BUILD_STATE_FILE" "WrtReleaseInputSha256")
+SOURCE_COMMIT=$(build_state_value "$BUILD_STATE_FILE" "SourceCommit")
+SOURCE_LOCKS_SHA256=$(build_state_value "$BUILD_STATE_FILE" "SourceLocksSha256")
+CONFIG_SHA256=$(build_state_value "$BUILD_STATE_FILE" "ConfigSha256")
+PREPARED_SOURCE_SHA256=$(build_state_value "$BUILD_STATE_FILE" "PreparedSourceSha256")
+APK_BUILD_PUBLIC_KEY_SHA256=$(build_state_value "$BUILD_STATE_FILE" "ApkBuildPublicKeySha256")
+BUILD_CONTAINER_BASE=$(build_state_value "$BUILD_STATE_FILE" "BuildContainerBase")
+BUILD_CONTAINER_IMAGE_ID=$(build_state_value "$BUILD_STATE_FILE" "BuildContainerImageId")
+KERNEL_PATCHVER=$(sed -n 's/^KERNEL_PATCHVER:=[[:space:]]*//p' \
+    "$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/Makefile" | head -n 1)
+KERNEL_SUFFIX=$(sed -n "s/^LINUX_VERSION-${KERNEL_PATCHVER}[[:space:]]*=[[:space:]]*//p" \
+    "$BASE_PATH/../$BUILD_DIR/target/linux/generic/kernel-${KERNEL_PATCHVER}" | head -n 1)
+cat >"$FIRMWARE_DIR/BUILD_PROVENANCE.txt" <<EOF
+Device: $Dev
+WrtReleaseCommit: $WRT_RELEASE_COMMIT
+WrtReleaseTreeState: $WRT_RELEASE_TREE_STATE
+WrtReleaseInputSha256: $WRT_RELEASE_INPUT_SHA256
+SourceUrl: $REPO_URL
+SourceBranch: $REPO_BRANCH
+SourceCommit: $SOURCE_COMMIT
+SourceLocksSha256: $SOURCE_LOCKS_SHA256
+BuildContainerBase: $BUILD_CONTAINER_BASE
+BuildContainerImageId: $BUILD_CONTAINER_IMAGE_ID
+ConfigSha256: $CONFIG_SHA256
+PreparedSourceSha256: $PREPARED_SOURCE_SHA256
+ApkBuildPublicKeySha256: $APK_BUILD_PUBLIC_KEY_SHA256
+Kernel: ${KERNEL_PATCHVER}${KERNEL_SUFFIX}
+ConfigFragments: $(join_fragments "${EFFECTIVE_CONFIG_FRAGMENTS[@]}")
+DownloadJobs: $DOWNLOAD_JOBS
+BuildJobs: $BUILD_JOBS
+EOF
+
 (
     cd "$FIRMWARE_DIR"
     mapfile -d '' firmware_files < <(find . -maxdepth 1 -type f ! -name "SHA256SUMS" -printf '%P\0' | sort -z)
     sha256sum "${firmware_files[@]}" >SHA256SUMS
 )
 
-verify_profile_artifacts "$Dev" "$FIRMWARE_DIR"
+verify_profile_artifacts "$Dev" "$FIRMWARE_DIR" "$BASE_PATH/../$BUILD_DIR"
 
 if [[ -d action_build ]]; then
     make clean

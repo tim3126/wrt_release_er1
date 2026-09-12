@@ -57,9 +57,22 @@ if [[ $Build_Mod == "debug" ]]; then
     echo "[container] running inside $(hostname) as $(whoami) in $(pwd)"
     ./build.sh "$Dev" debug
     BUILD_WORKDIR=$(resolve_build_dir)
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        echo "[container] debug verification completed; no interactive terminal requested."
+        exit 0
+    fi
     cd "$BUILD_WORKDIR"
     export PS1='(wrt-container-debug) \u@\h \w\\$ '
     exec bash -i
+fi
+
+if [[ $Build_Mod == "resume" ]]; then
+    LOGFILE="build-$Dev-resume-$(date +%Y%m%d-%H%M%S).log"
+    exec > >(tee -a "$LOGFILE") 2>&1
+    set -x
+    echo "[container] resuming inside $(hostname) as $(whoami) in $(pwd)"
+    ./build.sh "$Dev" resume
+    exit 0
 fi
 
 LOGFILE="build-$Dev-$(date +%Y%m%d-%H%M%S).log"

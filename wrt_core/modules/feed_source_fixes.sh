@@ -57,8 +57,8 @@ update_homeproxy() {
     if [ -d "$target_dir" ]; then
         echo "正在更新 homeproxy..."
         rm -rf "$target_dir"
-        if ! git_retry clone --depth 1 "$repo_url" "$target_dir"; then
-            echo "错误：从 $repo_url 克隆 homeproxy 仓库失败" >&2
+        if ! git_retry clone --depth 1 "$repo_url" "$target_dir" || ! checkout_locked_commit "$target_dir" "$HOMEPROXY_COMMIT"; then
+            echo "错误：从 $repo_url 检出 homeproxy@$HOMEPROXY_COMMIT 失败" >&2
             exit 1
         fi
     fi
@@ -79,10 +79,10 @@ update_lucky() {
 
         echo "正在从 $lucky_repo_url 稀疏检出 luci-app-lucky 和 lucky..."
 
-        if ! git_retry clone --depth 1 --filter=blob:none --no-checkout "$lucky_repo_url" "$tmp_dir"; then
-            echo "错误：从 $lucky_repo_url 克隆仓库失败" >&2
+        if ! git_retry clone --depth 1 --filter=blob:none --no-checkout "$lucky_repo_url" "$tmp_dir" || ! checkout_locked_commit "$tmp_dir" "$LUCKY_COMMIT"; then
+            echo "错误：从 $lucky_repo_url 检出 lucky@$LUCKY_COMMIT 失败" >&2
             rm -rf "$tmp_dir"
-            return 0
+            return 1
         fi
 
         pushd "$tmp_dir" >/dev/null
@@ -91,9 +91,9 @@ update_lucky() {
             echo "错误：稀疏检出 luci-app-lucky 或 lucky 失败" >&2
             popd >/dev/null
             rm -rf "$tmp_dir"
-            return 0
+            return 1
         }
-        git_retry checkout --quiet
+        git_retry checkout --quiet "$LUCKY_COMMIT"
 
         \cp -rf "$tmp_dir/luci-app-lucky/." "$luci_app_lucky_dir/"
         \cp -rf "$tmp_dir/lucky/." "$lucky_dir/"
@@ -171,9 +171,67 @@ fix_mkpkg_format_invalid() {
 }
 
 
+fix_luci_docker_apk_versions() {
+    local relative_path
+    local expected_version
+    local normalized_version
+    local makefile_path
+    local declaration_count
+    local current_version
+    local tmp_path
+    local package_spec
+    local package_specs=(
+        "feeds/luci/libs/luci-lib-docker/Makefile|v0.3.4|0.3.4"
+        "feeds/luci/applications/luci-app-dockerman/Makefile|v0.5.26|0.5.26"
+    )
+
+    for package_spec in "${package_specs[@]}"; do
+        IFS='|' read -r relative_path expected_version normalized_version <<<"$package_spec"
+        makefile_path="$BUILD_DIR/$relative_path"
+        if [[ ! -f $makefile_path || -L $makefile_path ]]; then
+            echo "Error: required LuCI Docker Makefile is missing or is a symlink: $makefile_path" >&2
+            return 1
+        fi
+        declaration_count=$(grep -c '^PKG_VERSION:=' "$makefile_path" || true)
+        if [[ $declaration_count -ne 1 ]]; then
+            echo "Error: expected one PKG_VERSION declaration in $makefile_path, got $declaration_count" >&2
+            return 1
+        fi
+        current_version=$(sed -n 's/^PKG_VERSION:=//p' "$makefile_path")
+        case "$current_version" in
+            "$expected_version")
+                tmp_path="$makefile_path.tmp.$$"
+                if ! awk -v from="PKG_VERSION:=$expected_version" \
+                    -v to="PKG_VERSION:=$normalized_version" \
+                    '{ if ($0 == from) print to; else print }' \
+                    "$makefile_path" >"$tmp_path"; then
+                    rm -f "$tmp_path"
+                    return 1
+                fi
+                if ! chmod --reference="$makefile_path" "$tmp_path" \
+                    || ! mv -f "$tmp_path" "$makefile_path"; then
+                    rm -f "$tmp_path"
+                    return 1
+                fi
+                ;;
+            "$normalized_version")
+                ;;
+            *)
+                echo "Error: unsupported LuCI Docker package version '$current_version' in $makefile_path" >&2
+                return 1
+                ;;
+        esac
+        if ! grep -qFx "PKG_VERSION:=$normalized_version" "$makefile_path"; then
+            echo "Error: failed to normalize LuCI Docker APK version in $makefile_path" >&2
+            return 1
+        fi
+    done
+}
+
+
 update_tcping() {
     local tcping_path="$(get_custom_feed_worktree_dir)/tcping/Makefile"
-    local url="https://raw.githubusercontent.com/Openwrt-Passwall/openwrt-passwall-packages/refs/heads/main/tcping/Makefile"
+    local url="https://raw.githubusercontent.com/Openwrt-Passwall/openwrt-passwall-packages/${PASSWALL_PACKAGES_COMMIT}/tcping/Makefile"
 
     if [ -d "$(dirname "$tcping_path")" ]; then
         echo "正在更新 tcping Makefile..."
@@ -234,6 +292,59 @@ update_oaf_deconfig() {
 }
 EOF
         chmod +x "$disable_path"
+    fi
+}
+
+
+fix_oaf_apk_acl_collision() {
+    local custom_feed_dir
+    local backend_makefile
+    local backend_acl
+    local frontend_acl
+    local old_install_line
+    local new_install_line
+    local old_count
+    local new_count
+    local tmp_path
+    local required_file
+
+    custom_feed_dir=$(get_custom_feed_worktree_dir)
+    backend_makefile="$custom_feed_dir/open-app-filter/Makefile"
+    backend_acl="$custom_feed_dir/open-app-filter/files/luci-app-oaf.json"
+    frontend_acl="$custom_feed_dir/luci-app-oaf/root/usr/share/rpcd/acl.d/luci-app-oaf.json"
+    old_install_line=$'\t$(INSTALL_DATA) ./files/luci-app-oaf.json $(1)/usr/share/rpcd/acl.d/'
+    new_install_line=$'\t$(INSTALL_DATA) ./files/luci-app-oaf.json $(1)/usr/share/rpcd/acl.d/appfilter.json'
+
+    for required_file in "$backend_makefile" "$backend_acl" "$frontend_acl"; do
+        if [[ ! -f $required_file || -L $required_file ]]; then
+            echo "Error: required OAF source file is missing or is a symlink: $required_file" >&2
+            return 1
+        fi
+    done
+    old_count=$(grep -cFx "$old_install_line" "$backend_makefile" || true)
+    new_count=$(grep -cFx "$new_install_line" "$backend_makefile" || true)
+    if [[ $old_count -eq 1 && $new_count -eq 0 ]]; then
+        tmp_path="$backend_makefile.tmp.$$"
+        if ! awk -v from="$old_install_line" -v to="$new_install_line" \
+            '{ if ($0 == from) print to; else print }' \
+            "$backend_makefile" >"$tmp_path"; then
+            rm -f "$tmp_path"
+            return 1
+        fi
+        if ! chmod --reference="$backend_makefile" "$tmp_path" \
+            || ! mv -f "$tmp_path" "$backend_makefile"; then
+            rm -f "$tmp_path"
+            return 1
+        fi
+    elif [[ $old_count -ne 0 || $new_count -ne 1 ]]; then
+        echo "Error: unsupported OAF ACL install layout in $backend_makefile" >&2
+        return 1
+    fi
+
+    if ! grep -qFx "$new_install_line" "$backend_makefile" \
+        || grep -qFx "$old_install_line" "$backend_makefile"; then
+        echo "Error: failed to assign the backend OAF ACL to appfilter.json" >&2
+        return 1
     fi
 }
 

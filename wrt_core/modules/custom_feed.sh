@@ -37,7 +37,8 @@ sync_sparse_packages_to_feed_dir() {
     local repo_branch="$2"
     local target_dir="$3"
     local repo_label="$4"
-    shift 4
+    local repo_commit="$5"
+    shift 5
 
     local packages=("$@")
     local tmp_dir
@@ -54,8 +55,8 @@ sync_sparse_packages_to_feed_dir() {
     clone_args+=("$repo_url" "$tmp_dir")
 
     echo "正在从 $repo_label 稀疏同步指定目录..."
-    if ! git_retry "${clone_args[@]}"; then
-        echo "错误：从 $repo_url 拉取仓库骨架失败" >&2
+    if ! git_retry "${clone_args[@]}" || ! checkout_locked_commit "$tmp_dir" "$repo_commit"; then
+        echo "错误：从 $repo_url 检出 $repo_label@$repo_commit 失败" >&2
         rm -rf "$tmp_dir"
         return 1
     fi
@@ -91,6 +92,7 @@ sync_repo_root_package_to_feed_dir() {
     local target_dir="$3"
     local repo_label="$4"
     local package_name="$5"
+    local repo_commit="$6"
     local tmp_dir
     local clone_args=(clone --depth 1 --filter=blob:none)
 
@@ -103,8 +105,8 @@ sync_repo_root_package_to_feed_dir() {
     clone_args+=("$repo_url" "$tmp_dir")
 
     echo "正在从 $repo_label 同步单包仓库..."
-    if ! git_retry "${clone_args[@]}"; then
-        echo "错误：从 $repo_url 克隆 $repo_label 失败" >&2
+    if ! git_retry "${clone_args[@]}" || ! checkout_locked_commit "$tmp_dir" "$repo_commit"; then
+        echo "错误：从 $repo_url 检出 $repo_label@$repo_commit 失败" >&2
         rm -rf "$tmp_dir"
         return 1
     fi
@@ -187,6 +189,7 @@ install_custom_feed() {
     local repo_label
     local repo_url
     local repo_branch
+    local repo_commit
     local repo_packages
     local repo_package_array=()
 
@@ -199,8 +202,8 @@ install_custom_feed() {
 
     # 统一从外部仓库同步指定包，避免分散维护 feeds.conf。
     custom_feed_sources=(
-        "kenzok8/small-package|https://github.com/kenzok8/small-package.git||${base_custom_feed_packages[*]}"
-        "nikkinikki-org/OpenWrt-nikki|https://github.com/nikkinikki-org/OpenWrt-nikki.git|main|nikki luci-app-nikki mihomo-meta"
+        "kenzok8/small-package|https://github.com/kenzok8/small-package.git||$SMALL_PACKAGE_COMMIT|${base_custom_feed_packages[*]}"
+        "nikkinikki-org/OpenWrt-nikki|https://github.com/nikkinikki-org/OpenWrt-nikki.git|main|$NIKKI_COMMIT|nikki luci-app-nikki mihomo-meta"
     )
 
     feeds_path=$(get_feeds_path)
@@ -215,16 +218,16 @@ install_custom_feed() {
     mkdir -p "$custom_feed_dir"
 
     for source_entry in "${custom_feed_sources[@]}"; do
-        IFS='|' read -r repo_label repo_url repo_branch repo_packages <<< "$source_entry"
+        IFS='|' read -r repo_label repo_url repo_branch repo_commit repo_packages <<< "$source_entry"
         read -r -a repo_package_array <<< "$repo_packages"
 
-        if ! sync_sparse_packages_to_feed_dir "$repo_url" "$repo_branch" "$custom_feed_dir" "$repo_label" "${repo_package_array[@]}"; then
+        if ! sync_sparse_packages_to_feed_dir "$repo_url" "$repo_branch" "$custom_feed_dir" "$repo_label" "$repo_commit" "${repo_package_array[@]}"; then
             rm -rf "$custom_feed_dir"
             return 1
         fi
     done
 
-    if ! sync_repo_root_package_to_feed_dir "https://github.com/adminchenyu/eMMC-Health.git" "main" "$custom_feed_dir" "adminchenyu/eMMC-Health" "luci-app-emmc-health"; then
+    if ! sync_repo_root_package_to_feed_dir "https://github.com/adminchenyu/eMMC-Health.git" "main" "$custom_feed_dir" "adminchenyu/eMMC-Health" "luci-app-emmc-health" "$EMMC_HEALTH_COMMIT"; then
         rm -rf "$custom_feed_dir"
         return 1
     fi

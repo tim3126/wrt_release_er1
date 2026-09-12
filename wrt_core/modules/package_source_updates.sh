@@ -5,8 +5,8 @@ update_golang() {
     if [[ -d ./feeds/packages/lang/golang ]]; then
         echo "正在更新 golang 软件包..."
         \rm -rf ./feeds/packages/lang/golang
-        if ! git_retry clone --depth 1 -b "$GOLANG_BRANCH" "$GOLANG_REPO" ./feeds/packages/lang/golang; then
-            echo "错误：克隆 golang 仓库 $GOLANG_REPO 失败" >&2
+        if ! git_retry clone --depth 1 -b "$GOLANG_BRANCH" "$GOLANG_REPO" ./feeds/packages/lang/golang || ! checkout_locked_commit ./feeds/packages/lang/golang "$GOLANG_COMMIT"; then
+            echo "错误：检出 golang@$GOLANG_COMMIT 失败" >&2
             exit 1
         fi
     fi
@@ -127,8 +127,8 @@ update_diskman() {
         cd "$BUILD_DIR/feeds/luci/applications" || return
         \rm -rf "luci-app-diskman"
 
-        if ! git_retry clone --filter=blob:none --no-checkout "$repo_url" diskman; then
-            echo "错误：从 $repo_url 克隆 diskman 仓库失败" >&2
+        if ! git_retry clone --filter=blob:none --no-checkout "$repo_url" diskman || ! checkout_locked_commit diskman "$DISKMAN_COMMIT"; then
+            echo "错误：从 $repo_url 检出 diskman@$DISKMAN_COMMIT 失败" >&2
             exit 1
         fi
         cd diskman || return
@@ -136,7 +136,7 @@ update_diskman() {
         git_retry sparse-checkout init --cone
         git_retry sparse-checkout set applications/luci-app-diskman || return
 
-        git_retry checkout --quiet
+        git_retry checkout --quiet "$DISKMAN_COMMIT"
 
         mv applications/luci-app-diskman ../luci-app-diskman || return
         cd .. || return
@@ -158,8 +158,8 @@ _sync_luci_lib_docker() {
         mkdir -p "$BUILD_DIR/feeds/luci/libs" || return
         cd "$BUILD_DIR/feeds/luci/libs" || return
 
-        if ! git_retry clone --filter=blob:none --no-checkout "$repo_url" luci-lib-docker-tmp; then
-            echo "错误：从 $repo_url 克隆 luci-lib-docker 仓库失败" >&2
+        if ! git_retry clone --filter=blob:none --no-checkout "$repo_url" luci-lib-docker-tmp || ! checkout_locked_commit luci-lib-docker-tmp "$LUCI_LIB_DOCKER_COMMIT"; then
+            echo "错误：从 $repo_url 检出 luci-lib-docker@$LUCI_LIB_DOCKER_COMMIT 失败" >&2
             exit 1
         fi
         cd luci-lib-docker-tmp || return
@@ -167,7 +167,7 @@ _sync_luci_lib_docker() {
         git_retry sparse-checkout init --cone
         git_retry sparse-checkout set collections/luci-lib-docker || return
 
-        git_retry checkout --quiet
+        git_retry checkout --quiet "$LUCI_LIB_DOCKER_COMMIT"
 
         mv collections/luci-lib-docker ../luci-lib-docker || return
         cd .. || return
@@ -189,8 +189,8 @@ update_dockerman() {
         cd "$BUILD_DIR/feeds/luci/applications" || return
         \rm -rf "luci-app-dockerman"
 
-        if ! git_retry clone --filter=blob:none --no-checkout "$repo_url" dockerman; then
-            echo "错误：从 $repo_url 克隆 dockerman 仓库失败" >&2
+        if ! git_retry clone --filter=blob:none --no-checkout "$repo_url" dockerman || ! checkout_locked_commit dockerman "$DOCKERMAN_COMMIT"; then
+            echo "错误：从 $repo_url 检出 dockerman@$DOCKERMAN_COMMIT 失败" >&2
             exit 1
         fi
         cd dockerman || return
@@ -198,7 +198,7 @@ update_dockerman() {
         git_retry sparse-checkout init --cone
         git_retry sparse-checkout set applications/luci-app-dockerman || return
 
-        git_retry checkout --quiet
+        git_retry checkout --quiet "$DOCKERMAN_COMMIT"
 
         mv applications/luci-app-dockerman ../luci-app-dockerman || return
         cd .. || return

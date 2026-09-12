@@ -8,8 +8,8 @@ update_adguardhome() {
     echo "正在更新 luci-app-adguardhome..."
     rm -rf "$adguardhome_dir" 2>/dev/null
 
-    if ! git_retry clone --depth 1 "$repo_url" "$adguardhome_dir"; then
-        echo "错误：从 $repo_url 克隆 luci-app-adguardhome 仓库失败" >&2
+    if ! git_retry clone --depth 1 "$repo_url" "$adguardhome_dir" || ! checkout_locked_commit "$adguardhome_dir" "$ADGUARDHOME_LUCI_COMMIT"; then
+        echo "错误：从 $repo_url 检出 luci-app-adguardhome@$ADGUARDHOME_LUCI_COMMIT 失败" >&2
         exit 1
     fi
 }
@@ -48,21 +48,7 @@ install_opkg_distfeeds() {
     local distfeeds_conf="$emortal_def_dir/files/99-distfeeds.conf"
 
     if [ -d "$emortal_def_dir" ] && [ ! -f "$distfeeds_conf" ]; then
-        cat <<'EOF' >"$distfeeds_conf"
-src/gz openwrt_base https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/base/
-src/gz openwrt_luci https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/luci/
-src/gz openwrt_packages https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/packages/
-src/gz openwrt_routing https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/routing/
-src/gz openwrt_telephony https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/telephony/
-EOF
-
-        sed -i "/define Package\/default-settings\/install/a\\
-\\t\$(INSTALL_DIR) \$(1)/etc\\n\
-\t\$(INSTALL_DATA) ./files/99-distfeeds.conf \$(1)/etc/99-distfeeds.conf\n" $emortal_def_dir/Makefile
-
-        sed -i "/exit 0/i\\
-[ -f \'/etc/99-distfeeds.conf\' ] && mv \'/etc/99-distfeeds.conf\' \'/etc/opkg/distfeeds.conf\'\n\
-sed -ri \'/check_signature/s@^[^#]@#&@\' /etc/opkg.conf\n" $emortal_def_dir/files/99-default-settings
+        echo "警告：未找到由上游提供的已签名 opkg feeds；保持软件源为空，不生成降级 fallback。" >&2
     fi
 }
 
@@ -83,27 +69,31 @@ update_script_priority() {
 
 update_geoip() {
     local geodata_path="$(get_custom_feed_package_dir)/v2ray-geodata/Makefile"
-    if [ -d "${geodata_path%/*}" ] && [ -f "$geodata_path" ]; then
-        local GEOIP_VER=$(awk -F"=" '/GEOIP_VER:=/ {print $NF}' $geodata_path | grep -oE "[0-9]{1,}")
-        if [ -n "$GEOIP_VER" ]; then
-            local base_url="https://github.com/v2fly/geoip/releases/download/${GEOIP_VER}"
-            local old_SHA256
-            if ! old_SHA256=$(wget_retry -qO- "$base_url/geoip.dat.sha256sum" | awk '{print $1}'); then
-                echo "错误：从 $base_url/geoip.dat.sha256sum 获取旧的 geoip.dat 校验和失败" >&2
-                return 1
-            fi
-            local new_SHA256
-            if ! new_SHA256=$(wget_retry -qO- "$base_url/geoip-only-cn-private.dat.sha256sum" | awk '{print $1}'); then
-                echo "错误：从 $base_url/geoip-only-cn-private.dat.sha256sum 获取新的 geoip-only-cn-private.dat 校验和失败" >&2
-                return 1
-            fi
-            if [ -n "$old_SHA256" ] && [ -n "$new_SHA256" ]; then
-                if grep -q "$old_SHA256" "$geodata_path"; then
-                    sed -i "s|=geoip.dat|=geoip-only-cn-private.dat|g" "$geodata_path"
-                    sed -i "s/$old_SHA256/$new_SHA256/g" "$geodata_path"
-                fi
-            fi
-        fi
+    local actual_version
+
+    if [ ! -f "$geodata_path" ]; then
+        return 0
+    fi
+
+    actual_version=$(awk -F'=' '/^GEOIP_VER:=/ {print $2; exit}' "$geodata_path")
+    if [[ "$actual_version" != "$GEOIP_LOCKED_VERSION" ]]; then
+        echo "错误：v2ray-geodata GeoIP 版本不匹配：$actual_version != $GEOIP_LOCKED_VERSION" >&2
+        return 1
+    fi
+
+    if grep -qF "$GEOIP_SOURCE_SHA256" "$geodata_path"; then
+        sed -i \
+            -e 's|GEOIP_FILE:=geoip.dat|GEOIP_FILE:=geoip-only-cn-private.dat|' \
+            -e 's|URL_FILE:=geoip.dat|URL_FILE:=geoip-only-cn-private.dat|' \
+            -e "s|$GEOIP_SOURCE_SHA256|$GEOIP_CN_PRIVATE_SHA256|" \
+            "$geodata_path"
+    fi
+
+    if ! grep -qF 'GEOIP_FILE:=geoip-only-cn-private.dat.$(GEOIP_VER)' "$geodata_path" \
+        || ! grep -qF 'URL_FILE:=geoip-only-cn-private.dat' "$geodata_path" \
+        || ! grep -qF "HASH:=$GEOIP_CN_PRIVATE_SHA256" "$geodata_path"; then
+        echo "错误：v2ray-geodata 固定 GeoIP 输入未正确应用" >&2
+        return 1
     fi
 }
 
@@ -132,6 +122,23 @@ fix_opkg_check() {
     if [ -f "$patch_file" ]; then
         install -Dm644 "$patch_file" "$opkg_dir/patches/001-fix-provides-version-parsing.patch"
     fi
+}
+
+
+restrict_er1_luci_apk_upgrade() {
+    local package_manager_dir="$BUILD_DIR/package/feeds/luci/luci-app-package-manager"
+    local package_manager_call="$package_manager_dir/root/usr/libexec/package-manager-call"
+    local patch_file="$BASE_PATH/patches/002-taiyi-disable-luci-apk-upgrade.patch"
+
+    if [[ ! -f "$package_manager_call" || ! -f "$patch_file" ]]; then
+        echo "错误：缺少 Taiyi LuCI APK upgrade 限制输入" >&2
+        return 1
+    fi
+    if grep -qF 'Full APK upgrades are disabled on Taiyi' "$package_manager_call"; then
+        return 0
+    fi
+    patch -d "$package_manager_dir" -p1 --forward --fuzz=0 <"$patch_file"
+    grep -qF 'Full APK upgrades are disabled on Taiyi' "$package_manager_call"
 }
 
 
@@ -223,37 +230,66 @@ install_pbr_cmcc() {
     local pbr_dir="$pbr_pkg_dir/files/usr/share/pbr"
     local pbr_conf="$pbr_pkg_dir/files/etc/config/pbr"
     local pbr_makefile="$pbr_pkg_dir/Makefile"
+    local netflix_rule=$'\t$(INSTALL_DATA) ./files/usr/share/pbr/pbr.user.netflix $(1)/usr/share/pbr/pbr.user.netflix'
+    local cmcc_rule=$'\t$(INSTALL_BIN) ./files/usr/share/pbr/pbr.user.cmcc $(1)/usr/share/pbr/pbr.user.cmcc'
+    local cmcc6_rule=$'\t$(INSTALL_BIN) ./files/usr/share/pbr/pbr.user.cmcc6 $(1)/usr/share/pbr/pbr.user.cmcc6'
+    local rule
 
-    if [ -d "$pbr_pkg_dir" ]; then
-        echo "正在安装 PBR CMCC 配置文件..."
-        install -Dm644 "$BASE_PATH/patches/pbr.user.cmcc" "$pbr_dir/pbr.user.cmcc"
-        install -Dm644 "$BASE_PATH/patches/pbr.user.cmcc6" "$pbr_dir/pbr.user.cmcc6"
-
-        if [ -f "$pbr_makefile" ]; then
-            if ! grep -q "pbr.user.cmcc" "$pbr_makefile"; then
-                echo "正在修改 PBR Makefile 添加安装规则..."
-                sed -i '/pbr.user.netflix.*\$(1)/a\
-	$(INSTALL_DATA) ./files/usr/share/pbr/pbr.user.cmcc $(1)/usr/share/pbr/pbr.user.cmcc\
-	$(INSTALL_DATA) ./files/usr/share/pbr/pbr.user.cmcc6 $(1)/usr/share/pbr/pbr.user.cmcc6' "$pbr_makefile"
-            fi
+    if [[ ! -d $pbr_pkg_dir ]]; then
+        if is_er1_profile; then
+            echo "Error: required PBR package directory is missing: $pbr_pkg_dir" >&2
+            return 1
         fi
+        return 0
     fi
-
-    if [ -f "$pbr_conf" ]; then
-        if ! grep -q "pbr.user.cmcc" "$pbr_conf"; then
-            echo "正在添加 PBR CMCC 配置条目..."
-            sed -i "/option path '\/usr\/share\/pbr\/pbr.user.netflix'/,/option enabled '0'/{
-                /option enabled '0'/a\\
-\\
-config include\\
-	option path '/usr/share/pbr/pbr.user.cmcc'\\
-	option enabled '0'\\
-\\
-config include\\
-	option path '/usr/share/pbr/pbr.user.cmcc6'\\
-	option enabled '0'
-            }" "$pbr_conf"
+    for required_file in "$pbr_makefile" "$pbr_conf"; do
+        if [[ ! -f $required_file || -L $required_file ]]; then
+            echo "Error: required PBR source file is missing or is a symlink: $required_file" >&2
+            return 1
         fi
+    done
+
+    echo "正在安装 PBR CMCC 配置文件..."
+    install -Dm755 "$BASE_PATH/patches/pbr.user.cmcc" "$pbr_dir/pbr.user.cmcc"
+    install -Dm755 "$BASE_PATH/patches/pbr.user.cmcc6" "$pbr_dir/pbr.user.cmcc6"
+
+    sed -i '/pbr\.user\.cmcc/s/INSTALL_DATA/INSTALL_BIN/' "$pbr_makefile"
+    if ! grep -qF 'pbr.user.cmcc ' "$pbr_makefile" \
+        && ! grep -qF 'pbr.user.cmcc6 ' "$pbr_makefile"; then
+        if [[ $(grep -cFx "$netflix_rule" "$pbr_makefile" || true) -ne 1 ]]; then
+            echo "Error: expected one PBR Netflix install anchor in $pbr_makefile" >&2
+            return 1
+        fi
+        sed -i "/pbr.user.netflix.*\$(1)/a\\
+$cmcc_rule\\
+$cmcc6_rule" "$pbr_makefile"
+    fi
+    for rule in "$cmcc_rule" "$cmcc6_rule"; do
+        if [[ $(grep -cFx "$rule" "$pbr_makefile" || true) -ne 1 ]]; then
+            echo "Error: required executable PBR helper install rule is missing or duplicated: $rule" >&2
+            return 1
+        fi
+    done
+
+    if ! grep -q "pbr.user.cmcc" "$pbr_conf"; then
+        echo "正在添加 PBR CMCC 配置条目..."
+        sed -i "/option path '\/usr\/share\/pbr\/pbr.user.netflix'/,/option enabled '0'/{
+            /option enabled '0'/a\\
+\\
+config include\\
+\toption path '/usr/share/pbr/pbr.user.cmcc'\\
+\toption enabled '0'\\
+\\
+config include\\
+\toption path '/usr/share/pbr/pbr.user.cmcc6'\\
+\toption enabled '0'
+        }" "$pbr_conf"
+    fi
+    if [[ ! -x $pbr_dir/pbr.user.cmcc || ! -x $pbr_dir/pbr.user.cmcc6 ]] \
+        || ! grep -qF "option path '/usr/share/pbr/pbr.user.cmcc'" "$pbr_conf" \
+        || ! grep -qF "option path '/usr/share/pbr/pbr.user.cmcc6'" "$pbr_conf"; then
+        echo "Error: failed to install executable PBR CMCC helpers and configuration" >&2
+        return 1
     fi
 }
 

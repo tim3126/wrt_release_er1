@@ -12,8 +12,18 @@ fix_default_set() {
     else
         rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/990_set_argon_primary"
     fi
-    install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
-    install -Dm544 "$BASE_PATH/patches/992_set-wifi-uci.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_set-wifi-uci.sh"
+    if is_er1_profile; then
+        rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
+        rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/993_disable_unpublished_distfeeds"
+        install -Dm544 "$BASE_PATH/patches/995_configure_taiyi_apk_repositories" \
+            "$BUILD_DIR/package/base-files/files/etc/uci-defaults/995_configure_taiyi_apk_repositories"
+        rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_set-wifi-uci.sh"
+    else
+        install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
+        rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/993_disable_unpublished_distfeeds"
+        rm -f "$BUILD_DIR/package/base-files/files/etc/uci-defaults/995_configure_taiyi_apk_repositories"
+        install -Dm544 "$BASE_PATH/patches/992_set-wifi-uci.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_set-wifi-uci.sh"
+    fi
 
     if [ -f "$BUILD_DIR/package/emortal/autocore/files/tempinfo" ]; then
         if [ -f "$BASE_PATH/patches/tempinfo" ]; then
@@ -42,8 +52,8 @@ change_dnsmasq2full() {
 
 fix_mk_def_depends() {
     sed -i 's/libustream-mbedtls/libustream-openssl/g' $BUILD_DIR/include/target.mk 2>/dev/null
-    if [ -f $BUILD_DIR/target/linux/qualcommax/Makefile ]; then
-        sed -i 's/wpad-openssl/wpad-mesh-openssl/g' $BUILD_DIR/target/linux/qualcommax/Makefile
+    if ! is_er1_profile && [ -f "$BUILD_DIR/target/linux/qualcommax/Makefile" ]; then
+        sed -i 's/wpad-openssl/wpad-mesh-openssl/g' "$BUILD_DIR/target/linux/qualcommax/Makefile"
     fi
 }
 
@@ -67,7 +77,11 @@ update_default_lan_addr() {
 
 remove_something_nss_kmod() {
     local ipq_mk_path="$BUILD_DIR/target/linux/qualcommax/Makefile"
-    local target_mks=("$BUILD_DIR/target/linux/qualcommax/ipq60xx/target.mk" "$BUILD_DIR/target/linux/qualcommax/ipq807x/target.mk")
+    local target_mks=("$BUILD_DIR/target/linux/qualcommax/ipq60xx/target.mk")
+
+    if ! is_er1_profile; then
+        target_mks+=("$BUILD_DIR/target/linux/qualcommax/ipq807x/target.mk")
+    fi
 
     for target_mk in "${target_mks[@]}"; do
         if [ -f "$target_mk" ]; then
@@ -88,7 +102,9 @@ remove_something_nss_kmod() {
         sed -i '/kmod-qca-nss-macsec/d' "$ipq_mk_path"
 
         sed -i 's/automount //g' "$ipq_mk_path"
-        sed -i 's/cpufreq //g' "$ipq_mk_path"
+        if ! is_er1_profile; then
+            sed -i 's/cpufreq //g' "$ipq_mk_path"
+        fi
     fi
 }
 
@@ -226,13 +242,19 @@ update_dnsmasq_conf() {
 
 add_backup_info_to_sysupgrade() {
     local conf_path="$BUILD_DIR/package/base-files/files/etc/sysupgrade.conf"
+    local backup_path
+    local backup_paths=(
+        /etc/AdGuardHome.yaml
+        /etc/easytier
+        /etc/lucky/
+    )
 
     if [ -f "$conf_path" ]; then
-        cat >"$conf_path" <<'EOF'
-/etc/AdGuardHome.yaml
-/etc/easytier
-/etc/lucky/
-EOF
+        for backup_path in "${backup_paths[@]}"; do
+            if ! grep -Fqx "$backup_path" "$conf_path"; then
+                printf '%s\n' "$backup_path" >>"$conf_path"
+            fi
+        done
     fi
 }
 

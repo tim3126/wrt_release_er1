@@ -1,0 +1,41 @@
+#!/bin/sh
+set -e
+
+opkg_conf_dir="${OPKG_CONF_DIR:-/etc/opkg}"
+opkg_lists_dir="${OPKG_LISTS_DIR:-/var/opkg-lists}"
+distfeeds="$opkg_conf_dir/distfeeds.conf"
+bad_base='https://downloads.immortalwrt.org/releases/25.12.2/'
+
+[ -e "$distfeeds" ] || exit 0
+[ -r "$distfeeds" ] || exit 1
+removed_feeds="$(awk -v bad="$bad_base" '
+    $1 ~ /^src(\/gz)?$/ && index($3, bad) == 1 { print $2 }
+' "$distfeeds")"
+[ -n "$removed_feeds" ] || exit 0
+
+tmp="$opkg_conf_dir/.distfeeds.conf.wrt-release.$$"
+cleanup() {
+    rm -f "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+{
+    echo '# Unpublished LibWrt 25.12.2 ImmortalWrt feeds were disabled.'
+    echo '# Configure only a compatible signed binary repository.'
+    awk -v bad="$bad_base" '
+        $1 !~ /^src(\/gz)?$/ || index($3, bad) != 1 { print }
+    ' "$distfeeds"
+} >"$tmp"
+chmod 0644 "$tmp"
+mv -f "$tmp" "$distfeeds"
+trap - EXIT INT TERM
+
+if [ -d "$opkg_lists_dir" ]; then
+    printf '%s\n' "$removed_feeds" | while IFS= read -r feed; do
+        case "$feed" in
+            ''|*[!A-Za-z0-9_.-]*) continue ;;
+        esac
+        rm -f "$opkg_lists_dir/$feed" "$opkg_lists_dir/$feed.sig"
+    done
+fi
+exit 0

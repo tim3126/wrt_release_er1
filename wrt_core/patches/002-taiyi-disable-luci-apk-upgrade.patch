@@ -1,0 +1,15 @@
+--- a/root/usr/libexec/package-manager-call
++++ b/root/usr/libexec/package-manager-call
+@@ -8,6 +8,12 @@ else
+ 	ipkg_bin="opkg"
+ fi
+ 
++# A broad APK upgrade can replace Taiyi's pinned user-space baseline.
++if [ "$ipkg_bin" = "apk" ] && [ "$action" = "upgrade" ]; then
++	printf '%s\n' '{"code":2,"stderr":"Full APK upgrades are disabled on Taiyi; use a reviewed firmware sysupgrade."}'
++	exit 0
++fi
++
+ case "$action" in
+ 	list-installed)
+ 		if [ $ipkg_bin = "apk" ]; then

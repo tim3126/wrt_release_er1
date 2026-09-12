@@ -1,0 +1,43 @@
+#!/bin/sh
+set -e
+
+repo_dir="${APK_REPOSITORIES_DIR:-/etc/apk/repositories.d}"
+distfeeds="$repo_dir/distfeeds.list"
+tmp="$repo_dir/.distfeeds.list.taiyi.$$"
+legacy_opkg_dir="${LEGACY_OPKG_DIR:-/etc/opkg}"
+legacy_opkg_conf="${LEGACY_OPKG_CONF:-/etc/opkg.conf}"
+legacy_opkg_lists="${LEGACY_OPKG_LISTS_DIR:-/var/opkg-lists}"
+mirror='https://mirror.nju.edu.cn/immortalwrt'
+release='25.12.2'
+arch='aarch64_cortex-a53'
+
+cleanup() {
+    rm -f "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+mkdir -p "$repo_dir"
+cat >"$tmp" <<EOF
+# Taiyi user-space feeds. Public target and kmods feeds are intentionally omitted.
+$mirror/releases/$release/packages/$arch/base/packages.adb
+$mirror/releases/$release/packages/$arch/luci/packages.adb
+$mirror/releases/$release/packages/$arch/packages/packages.adb
+$mirror/releases/$release/packages/$arch/routing/packages.adb
+$mirror/releases/$release/packages/$arch/telephony/packages.adb
+EOF
+chmod 0644 "$tmp"
+mv -f "$tmp" "$distfeeds"
+trap - EXIT INT TERM
+
+# Keep the ImmortalWrt mirror selector consistent with the effective repository.
+if command -v uci >/dev/null 2>&1 && uci -q get 'system.@imm_init[0]' >/dev/null 2>&1; then
+    uci -q set "system.@imm_init[0].apk_mirror=$mirror"
+    uci -q commit system
+fi
+
+# Retained R1 configuration may contain obsolete opkg conffiles and indexes.
+[ -n "$legacy_opkg_dir" ] && rm -rf "$legacy_opkg_dir"
+[ -n "$legacy_opkg_conf" ] && rm -f "$legacy_opkg_conf"
+[ -n "$legacy_opkg_lists" ] && rm -rf "$legacy_opkg_lists"
+
+exit 0

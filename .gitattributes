@@ -1,0 +1,19 @@
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.config text eol=lf
+*.ini text eol=lf
+*.env text eol=lf
+
+# Build-time source patches and extensionless shell helpers copied into firmware images.
+wrt_core/patches/002-taiyi-disable-luci-apk-upgrade.patch text eol=lf
+wrt_core/patches/990_set_argon_primary text eol=lf
+wrt_core/patches/991_custom_settings text eol=lf
+wrt_core/patches/993_disable_unpublished_distfeeds text eol=lf
+wrt_core/patches/995_configure_taiyi_apk_repositories text eol=lf
+wrt_core/patches/cpuusage text eol=lf
+wrt_core/patches/hnatusage text eol=lf
+wrt_core/patches/smp_affinity text eol=lf
+wrt_core/patches/tempinfo text eol=lf
+wrt_core/patches/pbr.user.cmcc text eol=lf
+wrt_core/patches/pbr.user.cmcc6 text eol=lf
