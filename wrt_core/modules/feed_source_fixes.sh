@@ -300,6 +300,7 @@ fix_oaf_apk_acl_collision() {
     local custom_feed_dir
     local backend_makefile
     local backend_acl
+    local frontend_makefile
     local frontend_acl
     local old_install_line
     local new_install_line
@@ -311,11 +312,12 @@ fix_oaf_apk_acl_collision() {
     custom_feed_dir=$(get_custom_feed_worktree_dir)
     backend_makefile="$custom_feed_dir/open-app-filter/Makefile"
     backend_acl="$custom_feed_dir/open-app-filter/files/luci-app-oaf.json"
+    frontend_makefile="$custom_feed_dir/luci-app-oaf/Makefile"
     frontend_acl="$custom_feed_dir/luci-app-oaf/root/usr/share/rpcd/acl.d/luci-app-oaf.json"
     old_install_line=$'\t$(INSTALL_DATA) ./files/luci-app-oaf.json $(1)/usr/share/rpcd/acl.d/'
     new_install_line=$'\t$(INSTALL_DATA) ./files/luci-app-oaf.json $(1)/usr/share/rpcd/acl.d/appfilter.json'
 
-    for required_file in "$backend_makefile" "$backend_acl" "$frontend_acl"; do
+    for required_file in "$backend_makefile" "$backend_acl" "$frontend_makefile"; do
         if [[ ! -f $required_file || -L $required_file ]]; then
             echo "Error: required OAF source file is missing or is a symlink: $required_file" >&2
             return 1
@@ -323,6 +325,25 @@ fix_oaf_apk_acl_collision() {
     done
     old_count=$(grep -cFx "$old_install_line" "$backend_makefile" || true)
     new_count=$(grep -cFx "$new_install_line" "$backend_makefile" || true)
+
+    # The locked destan19 source uses luci.mk and has no frontend RPCD ACL.
+    # Its sole backend ACL has no APK ownership collision to resolve.
+    if [[ -L $frontend_acl ]]; then
+        echo "Error: OAF frontend ACL must not be a symlink: $frontend_acl" >&2
+        return 1
+    fi
+    if [[ ! -e $frontend_acl ]]; then
+        if ! grep -qFx 'include $(TOPDIR)/feeds/luci/luci.mk' "$frontend_makefile" \
+            || [[ $old_count -ne 1 || $new_count -ne 0 ]]; then
+            echo "Error: unsupported OAF ACL layout without a frontend ACL" >&2
+            return 1
+        fi
+        return 0
+    fi
+    if [[ ! -f $frontend_acl ]]; then
+        echo "Error: OAF frontend ACL is not a regular file: $frontend_acl" >&2
+        return 1
+    fi
     if [[ $old_count -eq 1 && $new_count -eq 0 ]]; then
         tmp_path="$backend_makefile.tmp.$$"
         if ! awk -v from="$old_install_line" -v to="$new_install_line" \

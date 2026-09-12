@@ -708,6 +708,7 @@ mkdir -p \
     "$oaf_root/open-app-filter/files" \
     "$oaf_root/luci-app-oaf/root/usr/share/rpcd/acl.d"
 printf '%s\n' 'backend acl' >"$oaf_root/open-app-filter/files/luci-app-oaf.json"
+printf '%s\n' 'include $(TOPDIR)/feeds/luci/luci.mk' >"$oaf_root/luci-app-oaf/Makefile"
 printf '%s\n' 'frontend acl' \
     >"$oaf_root/luci-app-oaf/root/usr/share/rpcd/acl.d/luci-app-oaf.json"
 printf '%s\n' \
@@ -747,9 +748,15 @@ awk '
 ' "$repo_root/wrt_core/update.sh" \
     || fail 'OAF APK ACL collision fix is not ER1-only immediately after update_oaf_deconfig'
 rm -f "$oaf_root/luci-app-oaf/root/usr/share/rpcd/acl.d/luci-app-oaf.json"
-if fix_oaf_apk_acl_collision >/dev/null 2>&1; then
-    fail 'OAF APK ACL collision fix accepted a missing frontend ACL'
-fi
+printf '%s\n' \
+    'define Package/appfilter/install' \
+    $'\t$(INSTALL_DATA) ./files/luci-app-oaf.json $(1)/usr/share/rpcd/acl.d/' \
+    'endef' \
+    >"$oaf_root/open-app-filter/Makefile"
+fix_oaf_apk_acl_collision
+grep -qFx $'\t$(INSTALL_DATA) ./files/luci-app-oaf.json $(1)/usr/share/rpcd/acl.d/' \
+    "$oaf_root/open-app-filter/Makefile" \
+    || fail 'OAF luci.mk layout unexpectedly rewrote its sole backend ACL'
 printf '%s\n' 'frontend acl' \
     >"$oaf_root/luci-app-oaf/root/usr/share/rpcd/acl.d/luci-app-oaf.json"
 printf '%s\n' $'\t$(INSTALL_DATA) ./files/luci-app-oaf.json $(1)/usr/share/rpcd/acl.d/other.json' \
