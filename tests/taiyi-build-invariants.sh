@@ -793,6 +793,14 @@ if fix_easytier_release_integrity "$tmp/easytier-marker-only"; then
 fi
 printf '%s\n' \
     'PKG_NAME:=easytier' \
+    'define Build/Prepare' \
+    'mkdir -p $(PKG_BUILD_DIR)' \
+    'if [ ! -f $(PKG_BUILD_DIR)/easytier-core ]; then \\' \
+    'wget https://github.com/EasyTier/EasyTier/releases/download/v$(PKG_VERSION)/$(PKG_NAME)-linux-$(APP_ARCH)-v$(PKG_VERSION).zip -O $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip; \\' \
+    'unzip -o -j $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip -d $(PKG_BUILD_DIR); \\' \
+    'rm -f $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip; \\' \
+    'fi' \
+    'endef' \
     '$(eval $(call BuildPackage,$(PKG_NAME)))' \
     >"$tmp/easytier/Makefile"
 printf '%s\n' 'PKG_MD5SUM:=legacy-md5' >"$tmp/cups/Makefile"
@@ -803,6 +811,8 @@ grep -qFx "EASYTIER_SOURCE_SHA256:=$EASYTIER_AARCH64_RELEASE_SHA256" \
     || fail 'EasyTier source fix did not inject the locked release SHA-256'
 grep -qF 'sha256sum -c -' "$tmp/easytier/Makefile" \
     || fail 'EasyTier source fix did not verify the release archive before extraction'
+[[ $(grep -cFx 'define Build/Prepare' "$tmp/easytier/Makefile") -eq 1 ]] \
+    || fail 'EasyTier source fix retained an unaudited duplicate prepare block'
 grep -qFx "PKG_HASH:=$CUPS_SOURCE_SHA256" "$tmp/cups/Makefile" \
     || fail 'CUPS source fix did not replace the legacy MD5 checksum'
 if grep -q '^PKG_MD5SUM:=' "$tmp/cups/Makefile"; then

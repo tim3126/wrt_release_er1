@@ -201,15 +201,22 @@ fix_easytier_release_integrity() {
             || { echo "错误：easytier 已有 marker 但缺少完整 archive integrity guard" >&2; return 1; }
         return 0
     fi
-    if ! grep -qFx "$expected_eval" "$makefile_path"; then
-        echo "错误：easytier Makefile 缺少预期的 BuildPackage 入口" >&2
+    if ! grep -qFx "$expected_eval" "$makefile_path" \
+        || [[ $(grep -cFx 'define Build/Prepare' "$makefile_path") -ne 1 ]] \
+        || ! grep -qF 'wget https://github.com/EasyTier/EasyTier/releases/download/v$(PKG_VERSION)/$(PKG_NAME)-linux-$(APP_ARCH)-v$(PKG_VERSION).zip' "$makefile_path" \
+        || ! grep -qF 'unzip -o -j $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip -d $(PKG_BUILD_DIR);' "$makefile_path"; then
+        echo "错误：easytier Makefile 缺少预期的未校验 archive prepare block" >&2
         return 1
     fi
 
     tmp_makefile=$(mktemp "$package_dir/.Makefile.XXXXXX") || return 1
-    if ! awk -v hash="$EASYTIER_AARCH64_RELEASE_SHA256" -v eval_line="$expected_eval" '
-$0 == eval_line {
-    print ""
+    if ! awk -v hash="$EASYTIER_AARCH64_RELEASE_SHA256" '
+$0 == "define Build/Prepare" {
+    if (replaced) {
+        exit 1
+    }
+    replaced = 1
+    in_prepare = 1
     print "# Taiyi verifies the exact ER1 release archive before extracting it."
     print "EASYTIER_SOURCE_SHA256:=" hash
     print "define Build/Prepare"
@@ -224,10 +231,21 @@ $0 == eval_line {
     print "\t\tunzip -o -j $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip -d $(PKG_BUILD_DIR); \\\\"
     print "\t\trm -f $(PKG_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION).zip; \\\\"
     print "\tfi"
-    print "endef"
-    print ""
+    next
+}
+in_prepare {
+    if ($0 == "endef") {
+        print "endef"
+        in_prepare = 0
+    }
+    next
 }
 { print }
+END {
+    if (!replaced || in_prepare) {
+        exit 1
+    }
+}
 ' "$makefile_path" >"$tmp_makefile"; then
         rm -f "$tmp_makefile"
         return 1
