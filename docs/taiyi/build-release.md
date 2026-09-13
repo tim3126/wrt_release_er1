@@ -95,12 +95,15 @@ BUILD_JOBS=8
 
 ## GitHub 云编译与发布
 
-- `Build WRT` 是候选构建入口，可手动选择 `jdcloud_er1_libwrt`，生成可下载 artifact，但不创建 Release。
+- `Build WRT` 是可复用的候选构建入口，也可手动选择 `jdcloud_er1_libwrt`；它生成可下载 artifact，但不创建 Release。
+- `Build Taiyi Push Candidate` 监听 `taiyi/r8-plugin-channel` 的非文档 push，固定调用 `Build WRT(model=jdcloud_er1_libwrt)`。成功后上传 `firmware-jdcloud_er1_libwrt` Actions artifact，保留 14 天；该路径使用 GitHub native runner，只用于云端候选验证，不满足生产 Release 的 audited-builder 身份门禁。
 - `Release Taiyi Firmware` 是 taiyi 专用生产入口，只允许手动触发，固定使用默认 fragments，并通过 `taiyi-production` environment 执行发布 job。
 - 构建 job 只有 `contents: read` 权限；发布 job 不执行上游构建代码，只下载已经通过门禁的 artifact，并拥有最小 `contents: write` 权限。
 - ER1 门禁要求恰好一个 `factory.bin` 和一个 `sysupgrade.bin`、不允许其他 `.bin`，并校验 SHA-256 和内嵌的 `jdcloud,re-cs-07` metadata。
 - Release 白名单只包含这两种镜像、manifest、profiles、三份 buildinfo、provenance 和 SHA-256。
 - workflow 使用固定 commit 的官方 Actions，不执行远程 `curl | sudo bash` 环境脚本。
+
+首次同步到专用 GitHub 仓库时，应同时推送 `main` 和 `taiyi/r8-plugin-channel`，并将仓库默认分支调整为 `taiyi/r8-plugin-channel`，使 Actions 页面默认展示当前 Taiyi workflow。首次 push candidate 成功只证明 GitHub native runner 能构建并通过候选门禁；不要据此自动创建生产 Release。
 
 生产 release 不接受 GitHub native runner 的 `BuildContainerImageId: native`。`Release Taiyi Firmware` 只会调用带 `use_audited_builder=true` 的构建路径，并要求 GitHub repository variables 提供：
 

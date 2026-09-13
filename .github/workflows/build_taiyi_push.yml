@@ -1,0 +1,31 @@
+name: Build Taiyi Push Candidate
+run-name: Taiyi candidate - ${{ github.ref_name }} @ ${{ github.sha }}
+
+on:
+  push:
+    branches:
+      - taiyi/r8-plugin-channel
+    paths-ignore:
+      - "**/*.md"
+      - ".gitignore"
+      - ".codebase-memory/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taiyi-push-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/build_wrt.yml
+    with:
+      model: jdcloud_er1_libwrt
+      add_fragments: ""
+      remove_fragments: ""
+      export_plugin_feed_candidate: false
+      use_audited_builder: false
+      audited_builder_image: ""
+      audited_builder_manifest_digest: ""
+      audited_builder_config_image_id: ""
