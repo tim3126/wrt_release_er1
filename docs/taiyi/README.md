@@ -50,6 +50,12 @@ wrt_release（产品构建与发布编排）
 
 R8 候选的 provenance 仍绑定功能代码 commit `3a9603d`；之后的纯文档提交不得用于重标候选。创建 tag、推送或实机反馈也不改变既有镜像身份。
 
+## 分支与基线保留
+
+2026-09-13 完成分支收敛后，本地与 `origin` 只保留 `main` 和 `taiyi/r8-plugin-channel` 两条业务分支；`origin/HEAD` 继续正常指向 `origin/main`。当前 R8 已设置 upstream，分支 tip 由后续文档/仓库维护提交推进，但已验证固件仍精确绑定 `3a9603d`。
+
+已部署 R6 不再使用长期分支保存，而由 annotated tag `taiyi-r6-deployed-20260912` 固定到 commit `058958548314380ca82810e244cde866a0943387`。旧提交消息重写前的候选历史由本地隐藏 ref `refs/backup/r8-plugin-channel-before-msgs` 暂存，仅用于旧 `0f83500` 候选 provenance；它不是业务分支，旧候选退役前不得删除。
+
 ## 强制原则
 
 1. 不直接从浮动分支 HEAD 生成生产固件。

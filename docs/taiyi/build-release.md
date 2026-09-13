@@ -149,6 +149,8 @@ NTFS-safe 候选位于 `E:\OTHERCODE\openwrt\artifacts\taiyi\taiyi-r8-3a9603d-do
 
 该目录是本地候选，不是生产发布。候选导出时未执行 push、tag、release、feed publication、刷机、GPT 修改、设备配置写入或 Windows shutdown。操作者随后确认修复有效，但本会话通过 DBX 发起的只读复核因设备返回 `Unknown server key` 被安全阻断；未自动信任新 host key，也未取得新的 firmware identity、FRPC/ubus 与 Dockerman UI/solver 证据。因此该反馈记录为操作者验收，不替代重新授权后的独立实机证据；push/tag/release/feed publication 仍未执行，生产提升仍需完成身份确认、FRPC disabled/enabled、Dockerman UI/solver、OAF、网络/NSS、恢复与 soak 门禁。
 
+候选完成后，仓库将 R8 功能、文档与本地索引忽略规则推送到 `origin/taiyi/r8-plugin-channel`。本地和远端只保留 `main` 与该 R8 业务分支；已部署 R6 由 annotated tag `taiyi-r6-deployed-20260912` 固定到 `058958548314380ca82810e244cde866a0943387`，不再依赖已删除的 R6/ER1/R7 开发分支。此 Git 收敛不代表创建 firmware Release，也不改变候选 `3a9603d` 的 provenance。
+
 ## 阶段 6：实机与发布
 
 实机步骤见 [刷写与恢复门禁](flash-recovery.md)，完整功能检查见 [验收矩阵](validation.md)。全部通过后才能：
