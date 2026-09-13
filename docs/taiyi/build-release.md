@@ -96,7 +96,7 @@ BUILD_JOBS=8
 ## GitHub 云编译与发布
 
 - `Build WRT` 是可复用的候选构建入口，也可手动选择 `jdcloud_er1_libwrt`；它生成可下载 artifact，但不创建 Release。
-- `Build Taiyi Push Candidate` 监听 `taiyi/r8-plugin-channel` 的非文档 push，固定调用 `Build WRT(model=jdcloud_er1_libwrt)`。成功后上传 `firmware-jdcloud_er1_libwrt` Actions artifact，保留 14 天；该路径使用 GitHub native runner，只用于云端候选验证，不满足生产 Release 的 audited-builder 身份门禁。
+- `Build Taiyi Push Candidate` 监听 `taiyi/r8-plugin-channel` 的非文档 push，也支持从 Actions 页面手动触发；两种触发方式都固定调用 `Build WRT(model=jdcloud_er1_libwrt)`。成功后上传 `firmware-jdcloud_er1_libwrt` Actions artifact，保留 14 天；该路径使用 GitHub native runner，只用于云端候选验证，不满足生产 Release 的 audited-builder 身份门禁。
 - `Release Taiyi Firmware` 是 taiyi 专用生产入口，只允许手动触发，固定使用默认 fragments，并通过 `taiyi-production` environment 执行发布 job。
 - 构建 job 只有 `contents: read` 权限；发布 job 不执行上游构建代码，只下载已经通过门禁的 artifact，并拥有最小 `contents: write` 权限。
 - ER1 门禁要求恰好一个 `factory.bin` 和一个 `sysupgrade.bin`、不允许其他 `.bin`，并校验 SHA-256 和内嵌的 `jdcloud,re-cs-07` metadata。
