@@ -10,9 +10,9 @@ network-critical luci-app-vlmcsd
 network-critical luci-i18n-vlmcsd-zh-cn
 safe luci-app-autoreboot
 safe luci-app-diskman
-network-critical frpc
-network-critical luci-app-frpc
-network-critical luci-i18n-frpc-zh-cn
+firmware-only frpc
+firmware-only luci-app-frpc
+firmware-only luci-i18n-frpc-zh-cn
 network-critical cloudflared
 network-critical luci-app-cloudflared
 network-critical luci-i18n-cloudflared-zh-cn

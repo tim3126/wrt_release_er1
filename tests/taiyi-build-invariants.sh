@@ -305,6 +305,141 @@ fi
     || fail 'Taiyi LuCI dependency renderer changed a rejected partial layout'
 BUILD_DIR="$tmp/package-manager-build"
 
+# FRPC remains installed, but an unconfigured client must not enter a boot
+# respawn loop. The reviewed UI flag is the only startup gate.
+frpc_build_dir="$tmp/frpc-default-build"
+frpc_fixture="$repo_root/tests/fixtures/frpc-default-disabled"
+mkdir -p "$frpc_build_dir"
+cp -a "$frpc_fixture/." "$frpc_build_dir/"
+BUILD_DIR="$frpc_build_dir"
+fix_er1_frpc_default_disabled
+frpc_init="$frpc_build_dir/feeds/packages/net/frp/files/frpc.init"
+frpc_config="$frpc_build_dir/feeds/packages/net/frp/files/frpc.config"
+frpc_js="$frpc_build_dir/feeds/luci/applications/luci-app-frpc/htdocs/luci-static/resources/view/frpc.js"
+taiyi_frpc_default_disabled_fixed "$frpc_init" "$frpc_config" "$frpc_js" \
+    || fail 'Taiyi FRPC default-disabled source patch did not reach a complete state'
+sh -n "$frpc_init" || fail 'patched FRPC init script is not valid shell'
+fix_er1_frpc_default_disabled
+
+frpc_runtime_init="$tmp/frpc-runtime.init"
+frpc_runtime_conf="$tmp/frpc-runtime.ini"
+sed "s#local conf_file=\"/var/etc/\$NAME.ini\"#local conf_file=\"$frpc_runtime_conf\"#" \
+    "$frpc_init" >"$frpc_runtime_init"
+run_frpc_start_test() (
+    local requested_enabled="$1"
+    local expected_open="$2"
+    local opened=0
+    local command_seen=0
+
+    # shellcheck disable=SC1090
+    source "$frpc_runtime_init"
+    config_load() { return 0; }
+    uci_validate_section() {
+        case "$requested_enabled" in
+            0|false) enabled=0 ;;
+            1|true) enabled=1 ;;
+            *) return 1 ;;
+        esac
+        stdout=1
+        stderr=1
+        user=frpc
+        group=frpc
+        respawn=1
+        env=
+        conf_inc=
+        return 0
+    }
+    config_list_foreach() { return 0; }
+    procd_open_instance() { opened=$((opened + 1)); }
+    procd_set_param() {
+        [[ ${1:-} == command ]] && command_seen=1
+        return 0
+    }
+    procd_close_instance() { return 0; }
+
+    start_service
+    [[ $opened -eq $expected_open ]] \
+        || fail "FRPC enabled=$requested_enabled opened $opened instances, expected $expected_open"
+    if [[ $expected_open -eq 1 && $command_seen -ne 1 ]]; then
+        fail 'enabled FRPC did not configure its executable command'
+    fi
+    if [[ $expected_open -eq 0 && $command_seen -ne 0 ]]; then
+        fail 'disabled FRPC configured a command'
+    fi
+)
+run_frpc_start_test 0 0
+run_frpc_start_test false 0
+run_frpc_start_test 1 1
+run_frpc_start_test true 1
+
+frpc_partial_dir="$tmp/frpc-default-partial"
+mkdir -p "$frpc_partial_dir"
+cp -a "$frpc_build_dir/." "$frpc_partial_dir/"
+cat >"$frpc_partial_dir/feeds/packages/net/frp/files/frpc.init" <<'EOF'
+#!/bin/sh /etc/rc.common
+
+start_service() {
+    procd_open_instance
+}
+
+fake_guard() {
+    # TAIYI_FRPC_DEFAULT_DISABLED: marker outside start_service
+    # 'enabled:bool:0' \
+    # [ "$enabled" -eq 1 ] || return 0
+    return 0
+}
+EOF
+frpc_partial_init="$frpc_partial_dir/feeds/packages/net/frp/files/frpc.init"
+frpc_partial_config="$frpc_partial_dir/feeds/packages/net/frp/files/frpc.config"
+frpc_partial_js="$frpc_partial_dir/feeds/luci/applications/luci-app-frpc/htdocs/luci-static/resources/view/frpc.js"
+if taiyi_frpc_default_disabled_fixed \
+    "$frpc_partial_init" "$frpc_partial_config" "$frpc_partial_js"; then
+    fail 'Taiyi FRPC validator accepted semantic tokens outside start_service'
+fi
+frpc_partial_before=$(sha256sum \
+    "$frpc_partial_init" "$frpc_partial_config" "$frpc_partial_js" \
+    | sha256sum | awk '{ print $1 }')
+BUILD_DIR="$frpc_partial_dir"
+if fix_er1_frpc_default_disabled >/dev/null 2>&1; then
+    fail 'Taiyi FRPC default-state fixer accepted a semantic partial layout'
+fi
+frpc_partial_after=$(sha256sum \
+    "$frpc_partial_init" "$frpc_partial_config" "$frpc_partial_js" \
+    | sha256sum | awk '{ print $1 }')
+[[ $frpc_partial_after == "$frpc_partial_before" ]] \
+    || fail 'Taiyi FRPC default-state fixer changed a rejected partial layout'
+
+frpc_rollback_dir="$tmp/frpc-default-rollback"
+mkdir -p "$frpc_rollback_dir"
+cp -a "$frpc_fixture/." "$frpc_rollback_dir/"
+frpc_rollback_before=$(sha256sum \
+    "$frpc_rollback_dir/feeds/packages/net/frp/files/frpc.init" \
+    "$frpc_rollback_dir/feeds/packages/net/frp/files/frpc.config" \
+    "$frpc_rollback_dir/feeds/luci/applications/luci-app-frpc/htdocs/luci-static/resources/view/frpc.js" \
+    | sha256sum | awk '{ print $1 }')
+frpc_replace_attempt=0
+taiyi_frpc_replace_file() {
+    frpc_replace_attempt=$((frpc_replace_attempt + 1))
+    [[ $frpc_replace_attempt -ne 2 ]] || return 1
+    mv -f "$1" "$2"
+}
+BUILD_DIR="$frpc_rollback_dir"
+if fix_er1_frpc_default_disabled >/dev/null 2>&1; then
+    fail 'Taiyi FRPC replacement fault injection unexpectedly succeeded'
+fi
+frpc_rollback_after=$(sha256sum \
+    "$frpc_rollback_dir/feeds/packages/net/frp/files/frpc.init" \
+    "$frpc_rollback_dir/feeds/packages/net/frp/files/frpc.config" \
+    "$frpc_rollback_dir/feeds/luci/applications/luci-app-frpc/htdocs/luci-static/resources/view/frpc.js" \
+    | sha256sum | awk '{ print $1 }')
+[[ $frpc_rollback_after == "$frpc_rollback_before" ]] \
+    || fail 'Taiyi FRPC replacement failure did not restore the original files'
+if compgen -G "$frpc_rollback_dir/.taiyi-frpc-default*" >/dev/null; then
+    fail 'Taiyi FRPC replacement failure left staging or backup state'
+fi
+taiyi_frpc_replace_file() { mv -f "$1" "$2"; }
+BUILD_DIR="$tmp/package-manager-build"
+
 plugin_test_root="$tmp/taiyi-apk-plugin-policy"
 plugin_catalog="$plugin_test_root/catalog"
 plugin_groups="$plugin_test_root/groups"
@@ -316,6 +451,13 @@ plugin_baseline_init="$plugin_test_root/baseline-init"
 mkdir -p "$plugin_test_root" "$plugin_bin" "$plugin_test_root/etc"
 cp "$repo_root/wrt_core/patches/taiyi-apk-plugin-catalog" "$plugin_catalog"
 cp "$repo_root/wrt_core/patches/taiyi-apk-plugin-groups" "$plugin_groups"
+for frpc_package in frpc luci-app-frpc luci-i18n-frpc-zh-cn; do
+    grep -qFx "firmware-only $frpc_package" "$plugin_catalog" \
+        || fail "FRPC package must remain firmware-only: $frpc_package"
+    if grep -qE "^[^[:space:]]+[[:space:]]+$frpc_package$" "$plugin_groups"; then
+        fail "firmware-only FRPC package remains online-upgrade eligible: $frpc_package"
+    fi
+done
 printf '2\n' >"$plugin_version"
 cat >"$plugin_bin/apk" <<'EOF'
 #!/bin/sh

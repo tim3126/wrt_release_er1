@@ -161,6 +161,9 @@ stage_pre_install_source_fixes() {
         fix_oaf_apk_acl_collision
     fi
     fix_ddns_go_default_config
+    if is_er1_profile; then
+        fix_er1_frpc_default_disabled
+    fi
     if ! is_er1_profile; then
         add_timecontrol
         add_quickfile

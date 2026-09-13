@@ -219,6 +219,158 @@ fix_er1_luci_apk_dependency_rendering() {
 }
 
 
+taiyi_frpc_default_disabled_fixed() {
+    local frpc_init="$1"
+    local frpc_config="$2"
+    local frpc_js="$3"
+    local init_block
+    local startup_block
+    local validate_line
+    local guard_line
+    local open_line
+
+    [[ -f $frpc_init && ! -L $frpc_init \
+        && -f $frpc_config && ! -L $frpc_config \
+        && -f $frpc_js && ! -L $frpc_js ]] || return 1
+
+    init_block=$(awk '
+        /^start_service\(\) \{$/ { capture = 1; depth = 0 }
+        capture {
+            line = $0
+            opens = gsub(/\{/, "{", line)
+            closes = gsub(/\}/, "}", line)
+            depth += opens - closes
+            print
+            if (depth == 0) exit
+        }
+    ' "$frpc_init")
+    [[ -n $init_block ]] || return 1
+    [[ $(grep -cE '^[[:space:]]*# TAIYI_FRPC_DEFAULT_DISABLED:' <<<"$init_block" || true) -eq 1 ]] \
+        && [[ $(grep -cE "^[[:space:]]*'enabled:bool:0'[[:space:]]*\\\\$" <<<"$init_block" || true) -eq 1 ]] \
+        && [[ $(grep -cE '^[[:space:]]*\[ "\$enabled" -eq 1 \] \|\| return 0$' <<<"$init_block" || true) -eq 1 ]] \
+        && [[ $(grep -cE '^[[:space:]]*procd_open_instance[[:space:]]*$' <<<"$init_block" || true) -eq 1 ]] \
+        || return 1
+    validate_line=$(grep -nE "^[[:space:]]*'enabled:bool:0'[[:space:]]*\\\\$" <<<"$init_block" | cut -d: -f1)
+    guard_line=$(grep -nE '^[[:space:]]*\[ "\$enabled" -eq 1 \] \|\| return 0$' <<<"$init_block" | cut -d: -f1)
+    open_line=$(grep -nE '^[[:space:]]*procd_open_instance[[:space:]]*$' <<<"$init_block" | cut -d: -f1)
+    [[ $validate_line -lt $guard_line && $guard_line -lt $open_line ]] || return 1
+
+    init_block=$(awk '
+        /^config init$/ { capture = 1 }
+        capture && /^config / && $0 != "config init" { capture = 0 }
+        capture { print }
+    ' "$frpc_config")
+    [[ $(grep -cE '^[[:space:]]*option enabled 0$' <<<"$init_block" || true) -eq 1 ]] \
+        || return 1
+
+    startup_block=$(awk '
+        /^const startupConf = \[$/ { capture = 1 }
+        capture { print }
+        capture && /^\];$/ { exit }
+    ' "$frpc_js")
+    [[ $(grep -cE "^[[:space:]]*\\[form.Flag, 'enabled', _\\('Enable service'\\)" <<<"$startup_block" || true) -eq 1 ]] \
+        && grep -qF "default: 'false'" <<<"$startup_block" \
+        && grep -qF 'rmempty: false' <<<"$startup_block"
+}
+
+
+taiyi_frpc_replace_file() {
+    mv -f "$1" "$2"
+}
+
+
+fix_er1_frpc_default_disabled() {
+    local patch_file="$BASE_PATH/patches/004-taiyi-frpc-default-disabled.patch"
+    local stage_root="$BUILD_DIR/.taiyi-frpc-default.$$"
+    local backup_root="$BUILD_DIR/.taiyi-frpc-default-backup.$$"
+    local relative_files=(
+        feeds/packages/net/frp/files/frpc.init
+        feeds/packages/net/frp/files/frpc.config
+        feeds/luci/applications/luci-app-frpc/htdocs/luci-static/resources/view/frpc.js
+    )
+    local replaced_files=()
+    local relative_file
+    local rollback_file
+    local rollback_failed=0
+    local frpc_init="${relative_files[0]}"
+    local frpc_config="${relative_files[1]}"
+    local frpc_js="${relative_files[2]}"
+
+    if [[ ! -f $patch_file || -L $patch_file ]]; then
+        echo "错误：缺少或拒绝非普通文件的 Taiyi FRPC default-state patch" >&2
+        return 1
+    fi
+    if taiyi_frpc_default_disabled_fixed \
+        "$BUILD_DIR/$frpc_init" "$BUILD_DIR/$frpc_config" "$BUILD_DIR/$frpc_js"; then
+        return 0
+    fi
+    for relative_file in "${relative_files[@]}"; do
+        if [[ ! -f $BUILD_DIR/$relative_file || -L $BUILD_DIR/$relative_file ]]; then
+            echo "错误：缺少或拒绝非普通文件的 Taiyi FRPC source input: $relative_file" >&2
+            return 1
+        fi
+    done
+    if grep -qF 'TAIYI_FRPC_DEFAULT_DISABLED' "$BUILD_DIR/$frpc_init" \
+        || grep -qF "'enabled:bool:0'" "$BUILD_DIR/$frpc_init" \
+        || grep -qE '^[[:space:]]*option enabled ' "$BUILD_DIR/$frpc_config" \
+        || grep -qF "[form.Flag, 'enabled', _('Enable service')" "$BUILD_DIR/$frpc_js"; then
+        echo "错误：拒绝部分应用或未知布局的 Taiyi FRPC default-state 修复" >&2
+        return 1
+    fi
+    if [[ -e $stage_root || -e $backup_root ]]; then
+        echo "错误：拒绝覆盖已有 Taiyi FRPC staging path" >&2
+        return 1
+    fi
+
+    for relative_file in "${relative_files[@]}"; do
+        if ! mkdir -p "$stage_root/${relative_file%/*}" "$backup_root/${relative_file%/*}" \
+            || ! cp -p "$BUILD_DIR/$relative_file" "$stage_root/$relative_file" \
+            || ! cp -p "$BUILD_DIR/$relative_file" "$backup_root/$relative_file"; then
+            rm -rf "$stage_root" "$backup_root"
+            echo "错误：Taiyi FRPC default-state staging 失败" >&2
+            return 1
+        fi
+    done
+    if ! patch -d "$stage_root" -p1 --forward --fuzz=0 --no-backup-if-mismatch <"$patch_file" \
+        || ! taiyi_frpc_default_disabled_fixed \
+            "$stage_root/$frpc_init" "$stage_root/$frpc_config" "$stage_root/$frpc_js"; then
+        rm -rf "$stage_root" "$backup_root"
+        echo "错误：Taiyi FRPC default-state patch 应用或验收失败" >&2
+        return 1
+    fi
+
+    for relative_file in "${relative_files[@]}"; do
+        if ! taiyi_frpc_replace_file "$stage_root/$relative_file" "$BUILD_DIR/$relative_file"; then
+            for rollback_file in "${replaced_files[@]}"; do
+                cp -p "$backup_root/$rollback_file" "$BUILD_DIR/$rollback_file" \
+                    || rollback_failed=1
+            done
+            rm -rf "$stage_root" "$backup_root"
+            if [[ $rollback_failed -ne 0 ]]; then
+                echo "错误：Taiyi FRPC replacement 与 rollback 均失败，源码树不可继续使用" >&2
+            else
+                echo "错误：Taiyi FRPC replacement 失败，已恢复原始文件" >&2
+            fi
+            return 1
+        fi
+        replaced_files+=("$relative_file")
+    done
+    if ! taiyi_frpc_default_disabled_fixed \
+        "$BUILD_DIR/$frpc_init" "$BUILD_DIR/$frpc_config" "$BUILD_DIR/$frpc_js"; then
+        for rollback_file in "${replaced_files[@]}"; do
+            cp -p "$backup_root/$rollback_file" "$BUILD_DIR/$rollback_file" \
+                || rollback_failed=1
+        done
+        rm -rf "$stage_root" "$backup_root"
+        echo "错误：Taiyi FRPC replacement 后验收失败，rollback=$rollback_failed" >&2
+        return 1
+    fi
+
+    rm -rf "$stage_root" "$backup_root"
+    return 0
+}
+
+
 netfilter_kmod_clash_include_fixed() {
     local include_netfilter_mk="$1"
 

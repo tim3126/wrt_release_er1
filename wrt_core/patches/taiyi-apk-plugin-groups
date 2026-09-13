@@ -29,9 +29,6 @@ vlmcsd-userspace luci-app-vlmcsd
 vlmcsd-userspace luci-i18n-vlmcsd-zh-cn
 autoreboot luci-app-autoreboot
 diskman-userspace luci-app-diskman
-frpc-userspace frpc
-frpc-userspace luci-app-frpc
-frpc-userspace luci-i18n-frpc-zh-cn
 cloudflared-userspace cloudflared
 cloudflared-userspace luci-app-cloudflared
 cloudflared-userspace luci-i18n-cloudflared-zh-cn
