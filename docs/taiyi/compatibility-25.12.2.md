@@ -86,6 +86,14 @@ AdGuardHome 当前只有 LuCI 管理包和 `/etc/init.d/AdGuardHome`，没有下
 
 刷机后 Dropbear host key 已更新；重新授权 DBX 时观察到 ED25519 指纹 `SHA256:M5LLzEc8IHK2KwNpn/FGDwlQbgykW21CGizo6aaniDI`。
 
+## 2026-09-13 后续只读运行复核
+
+后续重启后的 DBX 复核仍为 `r38135-0c4cd0f9920a`。系统约 2 小时 uptime 时无 OOM、崩溃、eMMC I/O 或 F2FS 错误，DDNS-Go named procd instance 正常。Docker 是操作者主动停止/排除项，但本次重启后 dockerd 因 `S99dockerd` 再次运行且没有 containers；这说明单次 stop 不持久，不代表 Docker 本身故障。IPv6 已由操作者明确禁用，odhcpd 的 no-public-prefix/RA lifetime 0 与当前策略一致。
+
+FRPC 的 `S99frpc` 同样恢复并在默认 `127.0.0.1:7000` 配置下 crash 6 次。根因是上游 init 无显式 enabled guard 且 respawn=1。长期修复 commit `3a9603dd5b9aa32cc30383a22793a1fc50c17f23` 保留 FRPC 插件，新增默认关闭的 UCI/LuCI gate，并将 FRPC 三包改为 firmware-only，防止公共在线升级覆盖该契约。包含该修复的本地候选已在 `E:\OTHERCODE\openwrt\artifacts\taiyi\taiyi-r8-3a9603d-dockerman-frpc-local-candidate-20260913T065900Z` 完成 clean build、最终 rootfs、6 个 index 签名、250 个 APK 完整性和 Windows export hash 验收。操作者随后确认修复有效；独立 DBX 复核因设备 SSH host key 变化返回 `Unknown server key`，未自动更新信任，因此新的设备 firmware identity 与未配置/启用/再禁用证据仍待重新授权后补录。
+
+内核继续报告 eMMC primary/alternate GPT 元数据不一致，但分区、squashfs 和 loop-F2FS 均正常且没有块错误。此项保留为恢复/存储专项，不得在运行设备上未经备份、恢复演练和授权执行分区表修复。
+
 ## 升级后 LuCI/helper 与软件源回归
 
 升级后 LuCI 状态页的 CPU 使用率与温度一度显示 `?`。直接调用 `ubus call luci getCPUUsage` 和 `ubus call luci getTempInfo` 同样返回 `?`；thermal sysfs 可正常读取约 `71400`，证明传感器与内核接口正常。根因是 `/sbin/cpuusage` 和 `/sbin/tempinfo` 被以 CRLF 打包，shebang 实际为 `#!/bin/sh\r`，内核因此无法找到解释器。相同问题还影响 `/etc/init.d/smp_affinity`、两份 PBR helper 和未完成的 `/etc/uci-defaults/991_custom_settings`。
@@ -98,15 +106,15 @@ AdGuardHome 当前只有 LuCI 管理包和 `/etc/init.d/AdGuardHome`，没有下
 
 构建编排已为无扩展名 shell patches 增加 LF 属性和 CR 字节回归检查，并为当前 opkg R1 安装一次性 distfeeds 防护脚本。该脚本只删除本固件生成的 ImmortalWrt 25.12.2 错误源及其对应缓存，写入采用失败即保留的原子路径；管理员后来配置的其他签名源及其缓存不会被覆盖。固定构建容器中的 `tests/taiyi-build-invariants.sh` 已通过。原 final 固件与 exact bundle 不作覆盖，它们仍精确对应当前 p10/p11 的已部署基线，但包含本节所述回归；未来候选必须重新构建并生成新的 provenance、大小与 SHA-256。
 
-## APK 迁移方向（尚未构建或部署）
+## APK 迁移方向（本地候选已构建，尚未部署）
 
-后续 Taiyi 候选改用 LibWrt 25.12 的原生 APK 路径。变更只作用于 `jdcloud_er1_libwrt` profile：最终配置必须启用 `CONFIG_USE_APK`、`apk-openssl`、签名包、TLS 证书校验、ImmortalWrt/OpenWrt keyring 和支持 APK 的 LuCI Package Manager，并明确排除 opkg 与旧 `luci-lib-ipkg`。这不是在当前 R1 上原地安装另一个包管理器；只有重新构建并通过门禁的 sysupgrade 才能完成迁移。
+R8 本地候选已改用 LibWrt 25.12 的原生 APK 路径。变更只作用于 `jdcloud_er1_libwrt` profile：最终配置启用 `CONFIG_USE_APK`、`apk-openssl`、签名包、TLS 证书校验、ImmortalWrt/OpenWrt keyring 和支持 APK 的 LuCI Package Manager，并明确排除 opkg 与旧 `luci-lib-ipkg`。这不是在当前运行设备上原地安装另一个包管理器；只有经过授权刷入并通过实机门禁的 sysupgrade 才能完成设备迁移。
 
 计划中的运行时 `distfeeds.list` 只启用 NJU 镜像的 `aarch64_cortex-a53` 架构级 `base`、`luci`、`packages`、`routing` 和 `telephony` 仓库。已验证这五个路径均发布 `packages.adb`。公共 `targets/qualcommax/ipq60xx` 与 `kmods` 仓库必须省略，因为它们不是由 Taiyi 固定的 LibWrt/NSS 构建产生，kernel ABI 与 NSS 组合不匹配；管理员维护的 `customfeeds.list` 保持不变。
 
 R8 的 LuCI 受控插件通道不允许 `apk add`、删除或全量升级。它只接受同一审核包组中的显式升级请求，自动加入该组当前已安装成员，并在模拟计划完整解析且所有变更仍属于该组、未触及固件基线时执行。OAF 使用 `destan19/OpenAppFilter` 锁定源码；`appfilter`、`luci-app-oaf` 和翻译可作为用户态组在线更新，但 `kmod-oaf` 固定在固件中。HomeProxy、DDNS-Go、AdGuardHome、CUPS、Docker 与 eMMC Health 等已审核用户态组采用相同规则。当前 `customfeeds.list` 仍由管理员维护；在部署独立签名的 Taiyi add-on feed 并完成离线验收前，自定义插件不应被视为可在线更新。若 solver 带入 kernel、任意 `kmod-*`、NSS/ECM、libc/musl、base-files、procd、netifd、firewall4、APK/keyring、其他固件包、基线包或跨组依赖，必须拒绝整笔事务并通过下一版完整固件交付。禁止使用公共 target/kmod 包规避失败。
 
-源代码中的 APK 选择、仓库策略和静态 invariant 只表示迁移实现已准备，不代表候选已经编译、签名链已经在产物中验收，或实机已经批准升级。正式交付前还必须完成 clean build、rootfs 检查、NJU 签名验证、离线 APK 求解测试、备用/可恢复设备测试和完整回滚验证。
+commit `3a9603dd5b9aa32cc30383a22793a1fc50c17f23` 的本地候选已经完成 clean build、最终 rootfs/image 检查、build public key 绑定、6 个本地 index 签名、250 个 APK 完整性和 Windows export hash 验收。这仍不代表当前设备已迁移或已批准生产升级。正式交付前还必须完成 NJU 运行态签名/离线 APK 求解、授权实机升级、备用/可恢复设备、FRPC 与 Dockerman 专项、网络/NSS、完整回滚和 soak 验证。
 
 ## 刷写前备份
 

@@ -2,6 +2,8 @@
 
 本仓库用于按设备配置自动拉取 OpenWrt / ImmortalWrt / LiBwrt 源码、应用自定义补丁与软件包配置，并输出固件到 `firmware/` 目录。
 
+JDCloud RE-CS-07（taiyi）的二开架构、WSL2 环境、构建发布、刷写恢复和验收规范见 [Taiyi Firmware Documentation](docs/taiyi/README.md)。Taiyi 后续候选使用 OpenWrt 25.12 的 APK 包管理路径，运行时只启用经过门禁的架构级 feeds；公共 target/kmod 包不得用于自定义 NSS 内核。
+
 ## 1. 环境准备
 
 推荐使用 Ubuntu LTS 或其他主流 Linux 发行版。OpenWrt 编译对磁盘空间、内存和文件系统大小写敏感性有要求，建议预留充足磁盘空间并在原生 Linux 文件系统中编译。
@@ -50,6 +52,12 @@ cd wrt_release
 | `container_debug` | `./build.sh x64_immwrt container_debug` | 在 Docker 容器中执行 debug 流程并进入交互 shell。 |
 | `config_preview` | `./build.sh x64_immwrt config_preview` | 只预览配置片段组合，不拉取源码、不写构建目录。 |
 
+### Taiyi 云编译
+
+GitHub Actions 的 `Build WRT` 可手动选择 `jdcloud_er1_libwrt`，生成同时包含 RE-CS-07 `sysupgrade.bin` 和 `factory.bin` 的候选 artifact。`Release Taiyi Firmware` 是独立的手动生产发布入口；它不接受临时 fragment 覆盖，并只发布通过 ER1 双镜像、设备 metadata 和 SHA-256 门禁的白名单文件。详细流程见 [Taiyi 构建与发布文档](docs/taiyi/build-release.md)。
+
+运行中的 OpenWrt 只能使用 `sysupgrade.bin`；`factory.bin` 仅用于对应的安装或恢复流程，不能传给 `sysupgrade`。
+
 可通过环境变量临时追加或移除配置片段：
 
 ```bash
@@ -68,7 +76,8 @@ GitHub Actions 的手动构建也提供 `add_fragments` 与 `remove_fragments` �
 | 厂商 / 平台 | 设备 | 配置名 |
 | --- | --- | --- |
 | 京东云 | 雅典娜(02)、亚瑟(01)、太乙(07)、AX5(JDC版) | `jdcloud_ipq60xx_immwrt` |
-| 京东云 | 雅典娜(02)、亚瑟(01)、太乙(07)、AX5(JDC版) - LiBwrt | `jdcloud_ipq60xx_libwrt` |
+| 京东云 | 太乙 RE-CS-07 - LiBwrt 专用生产配置 | `jdcloud_er1_libwrt` |
+| 京东云 | 雅典娜(02)、亚瑟(01)、太乙(07)、AX5(JDC版) - LiBwrt 多设备通用配置（不用于 taiyi 生产发布） | `jdcloud_ipq60xx_libwrt` |
 | 京东云 | 百里 / AX6000 | `jdcloud_ax6000_immwrt` |
 | 阿里云 | AP8220 | `aliyun_ap8220_immwrt` |
 | 阿里云 | AP8220 - LiBwrt | `aliyun_ap8220_libwrt` |

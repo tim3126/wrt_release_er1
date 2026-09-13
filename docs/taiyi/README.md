@@ -38,15 +38,17 @@ wrt_release（产品构建与发布编排）
 
 ## 当前基线
 
-| 项目 | 当前生产基线 | 待迁移基线 |
+| 项目 | 已部署/已独立确认基线 | R8 状态 |
 | --- | --- | --- |
-| `wrt_release` | 当前运行 R1 对应的 dirty migration 输入已归档 | APK 迁移仍在当前分支验证，尚未提交 |
+| `wrt_release` | R6 commit `058958548314380ca82810e244cde866a0943387` | 功能代码 commit `3a9603dd5b9aa32cc30383a22793a1fc50c17f23`；clean candidate 已归档 |
 | LibWrt 分支 | `25.12-nss` | `25.12-nss` |
-| LibWrt 提交 | `0fd5daca26aed9cab74b4141690deb5d997383f1` | 保持固定，先只迁移包管理器 |
+| LibWrt 提交 | `0fd5daca26aed9cab74b4141690deb5d997383f1` | 保持固定 |
 | 内核 | Linux 6.12.103 | Linux 6.12.103 |
-| 包管理器 | opkg/IPK | APK；只启用架构 feeds，kernel/NSS/kmod 随固件 |
-| 候选状态 | 修正版 R1 已刷入并恢复 LuCI CPU/温度 | APK 源码改动待配置、构建、签名和实机门禁 |
+| 包管理器 | APK；五个 NJU 架构 feeds，kernel/NSS/kmod 随固件 | APK 受控插件组；public target/kmod feeds 继续禁止 |
+| 候选/设备状态 | R6 controlled reboot 与 T+1h 已通过，较长 soak 未完成 | R8 rootfs/image/index/APK/NTFS 验收通过；操作者确认修复有效，独立 DBX 复核因新 SSH host key 待重新授权 |
 | 设备 | `jdcloud,re-cs-07` | `jdcloud,re-cs-07` |
+
+R8 候选的 provenance 仍绑定功能代码 commit `3a9603d`；之后的纯文档提交不得用于重标候选。创建 tag、推送或实机反馈也不改变既有镜像身份。
 
 ## 强制原则
 

@@ -43,12 +43,27 @@ review.
 | Lucky | `gdy666/luci-app-lucky` locked by `LUCKY_COMMIT`, with Taiyi local release input | `https://github.com/gdy666/lucky` and `https://github.com/gdy666/luci-app-lucky` | Architecture-specific upstream binary and service/UI must move together. | firmware-only |
 | EasyTier | Locked `small-package` recipe with Taiyi ER1 archive lock | `https://github.com/EasyTier/EasyTier` | Requires `kmod-tun`; Taiyi verifies the exact `v2.6.4` aarch64 ZIP SHA-256 before extraction and fails for an unlocked architecture. | firmware-only |
 | CUPS | Locked `small-package` recipe with Taiyi SHA-256 source fix | `https://github.com/OpenPrinting/cups` | The reviewed online group is limited to `cups`, `libcups`, LuCI, and translation packages; any other library or platform solver change is rejected. Taiyi replaces the legacy MD5 checksum with the verified CUPS 2.3.3 source SHA-256. | network-critical user-space group |
-| FRP client | Inherited official feed recipe | `https://github.com/fatedier/frp` | Current recipe uses a versioned tarball and `PKG_HASH`; the client is an externally reachable reverse-tunnel component. | network-critical |
+| FRP client | Inherited official feed recipe plus Taiyi `004-taiyi-frpc-default-disabled.patch` | `https://github.com/fatedier/frp` | The recipe uses a versioned tarball and `PKG_HASH`. Upstream starts an unconfigured client at boot with respawn; Taiyi adds an explicit default-off UCI/LuCI gate. Public package upgrades could overwrite the init and UI contract, so FRPC remains installed but updates only with reviewed firmware. | firmware-only |
 | Cloudflared | Inherited official feed recipe | `https://github.com/cloudflare/cloudflared` | Current recipe uses a versioned tarball and `PKG_HASH`; the daemon connects Cloudflare Tunnel to local origins. | network-critical |
 | miniupnpd / LuCI UPnP | Inherited official feed recipe | `https://github.com/miniupnp/miniupnp` | The nftables variant installs firewall integration and interface hotplug logic. | firmware-only |
 | Samba4 / LuCI Samba4 | Inherited official feed recipes | `https://www.samba.org/` release tarballs | Recipe locks a source hash but the server depends on Samba libraries, VFS modules, TLS/auth libraries, and optional filesystem/kernel contracts. | firmware-only |
 | Vlmcsd | Locked `small-package` recipe | `https://github.com/Wind4/vlmcsd` | Recipe uses a versioned source archive and `PKG_HASH`; service/init/defaults expose a network listener. | network-critical |
 | msd_lite | Locked `small-package` recipe | `https://github.com/rozhuk-im/msd_lite` | Recipe pins an upstream Git commit and `PKG_MIRROR_HASH`; it is an IPTV/multicast network daemon and is not an initial add-on candidate. | network-critical |
+
+## Feed Metadata Warnings
+
+The `3a9603d` source-preparation run reports three dependency warnings from
+installed feed metadata:
+
+- `jool` references `kmod-nf-conntrack6`.
+- `openvswitch` references `kmod-nf-conntrack6`.
+- `trojan-plus` references `boost-system`.
+
+None of these packages is selected by the ER1 profile, and the final profile
+gate passes. These warnings are not the Dockerman dependency-detail bug and are
+not permission to add legacy packages or public target/kmod feeds. If any of
+these packages becomes selected later, source preparation must fail until its
+actual dependency closure is reviewed and available.
 
 ## Implementation References
 

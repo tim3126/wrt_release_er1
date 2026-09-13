@@ -21,6 +21,22 @@ The rootfs contains these inputs:
   packages other than catalogued update candidates.
 - `/usr/libexec/taiyi-apk-plugin-policy`: the LuCI transaction guard.
 
+The package-manager dependency tree is advisory and must not be treated as a
+solver result. Its Taiyi renderer prefers one compatible installed provider,
+otherwise one compatible repository provider, and recursively expands only
+when that provider is unique. Versioned virtual providers use the version
+declared by `provides`; equivalent provider records are deduplicated. Multiple
+compatible providers remain an explicit solver choice and do not contribute
+speculative child errors, package counts, or installation size. A direct
+missing dependency or a dependency with no compatible provider remains an
+error.
+
+This UI rule does not authorize a transaction. The backend still performs a
+fresh `apk --simulate` under `/tmp/ipkg.lock`, parses the complete plan, and
+applies the catalog, group, baseline and platform denylist before execution.
+Do not hide known package names in the UI, enable target/kmod repositories, or
+install legacy providers merely to remove a dependency-detail warning.
+
 The package-manager backend permits only explicit `upgrade <package...>`
 requests whose packages all belong to one reviewed group. It rejects broad
 upgrades and all install, remove, repair, downgrade, reinstall, local APK, URL,
@@ -47,7 +63,14 @@ OAF/AppFilter uses the authoritative
 group; `kmod-oaf` remains firmware-only and rejects the entire transaction if a
 solver ever attempts to change it. HomeProxy, DDNS-Go, AdGuardHome, CUPS,
 Docker, eMMC Health, and the previously eligible VLMCSD, AutoReboot, DiskMan,
-FRPC, Cloudflared, and SQM user-space components have explicit groups.
+Cloudflared, and SQM user-space components have explicit groups.
+
+FRPC remains installed but is firmware-only because Taiyi adds a default-disabled
+init and LuCI contract that an unreviewed package upgrade could overwrite. The
+default UCI value is `enabled=0`; no procd instance or respawn command is created
+until the operator configures the server, authentication and proxy rules and
+then explicitly enables FRPC in LuCI. FRPC updates ship with a reviewed firmware
+that preserves this contract.
 
 PBR remains firmware-only because a generic upstream update could remove
 Taiyi's CMCC helpers. Nikki/Mihomo, EasyTier, Lucky, UPnP, and Samba remain
@@ -140,3 +163,9 @@ management path before performing another update. At minimum, check LuCI access,
 WAN route, DNS resolution, and the selected service. Do not run a second APK
 operation to attempt an improvised rollback; package and service scripts are not
 an atomic transaction. Use the prior reviewed firmware for platform rollback.
+
+For dependency-detail warnings, save the displayed tree and compare it with a
+root-shell `apk --simulate upgrade <selected-package>` before deciding that a
+repository is incomplete. A zero solver result with a bounded reviewed-group
+plan means unselected provider branches are display-only; it does not prove
+runtime compatibility or bypass the Taiyi transaction policy.
