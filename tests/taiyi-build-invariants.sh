@@ -242,7 +242,8 @@ fi
 # The ER1 LuCI backend must reject broad APK upgrades and route an explicit
 # reviewed package through the rootfs policy helper.
 package_manager_dir="$tmp/package-manager-build/package/feeds/luci/luci-app-package-manager"
-mkdir -p "$package_manager_dir/root/usr/libexec"
+package_manager_js="$package_manager_dir/htdocs/luci-static/resources/view/package-manager.js"
+mkdir -p "$package_manager_dir/root/usr/libexec" "${package_manager_js%/*}"
 cat >"$package_manager_dir/root/usr/libexec/package-manager-call" <<'EOF'
 #!/bin/sh
 
@@ -265,6 +266,7 @@ case "$action" in
 	;;
 esac
 EOF
+cp "$repo_root/tests/fixtures/package-manager-provider-rendering.before.js" "$package_manager_js"
 BASE_PATH="$repo_root/wrt_core"
 BUILD_DIR="$tmp/package-manager-build"
 source "$service_fixes"
@@ -272,7 +274,36 @@ restrict_er1_luci_apk_upgrade
 package_manager_call="$package_manager_dir/root/usr/libexec/package-manager-call"
 grep -qF 'Taiyi controlled APK component-group transaction guard' "$package_manager_call" \
     || fail 'Taiyi LuCI package manager does not install the controlled plugin guard'
+fix_er1_luci_apk_dependency_rendering
+if ! taiyi_apk_dependency_rendering_fixed "$package_manager_js"; then
+    fail 'Taiyi LuCI package manager did not install the provider-aware dependency renderer'
+fi
 restrict_er1_luci_apk_upgrade
+fix_er1_luci_apk_dependency_rendering
+
+partial_build_dir="$tmp/package-manager-partial-build"
+partial_js="$partial_build_dir/package/feeds/luci/luci-app-package-manager/htdocs/luci-static/resources/view/package-manager.js"
+mkdir -p "${partial_js%/*}"
+cat >"$partial_js" <<'EOF'
+// TAIYI_PROVIDER_SELECTION_BEGIN
+function selectDependencyProvider() {}
+// TAIYI_PROVIDER_SELECTION_END
+function pkgStatus() {}
+function renderDependencyItem()
+{
+    const statusInfo = selected ? info : {};
+    (selection.pkg.depends || []).forEach(function(d) {});
+}
+function renderDependencies() {}
+EOF
+partial_hash_before=$(sha256sum "$partial_js" | awk '{ print $1 }')
+BUILD_DIR="$partial_build_dir"
+if fix_er1_luci_apk_dependency_rendering >/dev/null 2>&1; then
+    fail 'Taiyi LuCI dependency renderer accepted a sentinel-complete but partial layout'
+fi
+[[ $(sha256sum "$partial_js" | awk '{ print $1 }') == "$partial_hash_before" ]] \
+    || fail 'Taiyi LuCI dependency renderer changed a rejected partial layout'
+BUILD_DIR="$tmp/package-manager-build"
 
 plugin_test_root="$tmp/taiyi-apk-plugin-policy"
 plugin_catalog="$plugin_test_root/catalog"

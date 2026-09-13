@@ -6,6 +6,11 @@
 *.ini text eol=lf
 *.env text eol=lf
 *.py text eol=lf
+*.js text eol=lf
+
+# Unified diff context lines intentionally begin with a space and may preserve
+# source indentation or empty context; validate the applied JS separately.
+wrt_core/patches/003-taiyi-package-manager-provider-rendering.patch text eol=lf whitespace=-blank-at-eol,-space-before-tab
 
 docs/taiyi/**/*.md text eol=lf
 

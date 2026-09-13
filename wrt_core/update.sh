@@ -217,6 +217,7 @@ stage_post_install_package_fixes() {
     fix_openssl_ktls
     if is_er1_profile; then
         restrict_er1_luci_apk_upgrade
+        fix_er1_luci_apk_dependency_rendering
     else
         fix_opkg_check
     fi

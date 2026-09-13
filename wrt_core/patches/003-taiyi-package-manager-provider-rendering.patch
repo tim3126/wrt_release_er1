@@ -1,0 +1,221 @@
+--- a/htdocs/luci-static/resources/view/package-manager.js
++++ b/htdocs/luci-static/resources/view/package-manager.js
+@@ -523,17 +523,122 @@ function versionSatisfied(ver, ref, vop)
+ 	return false;
+ }
+ 
+-function pkgStatus(pkg, vop, ver, info)
++// TAIYI_PROVIDER_SELECTION_BEGIN
++// Dependency details are advisory. Expand one compatible provider for display,
++// while the locked APK policy simulation remains authoritative for execution.
++function dependencyProviderVersion(pkg, dependencyName)
+ {
++	if (!pkg)
++		return null;
++
++	if (pkg.name === dependencyName)
++		return pkg.version || null;
++
++	const provides = Array.isArray(pkg.provides) ? pkg.provides : [];
++
++	for (let i = 0; i < provides.length; i++) {
++		const provide = String(provides[i]);
++		const separator = provide.indexOf('=');
++		const name = separator === -1 ? provide : provide.substring(0, separator);
++
++		if (name === dependencyName)
++			return separator === -1 ? null : provide.substring(separator + 1);
++	}
++
++	return null;
++}
++
++function dependencyVersionSatisfied(ver, ref, vop)
++{
++	const result = compareVersion(ver, ref);
++
++	switch (vop) {
++	case '<':
++		return result < 0;
++	case '<=':
++		return result <= 0;
++	case '>':
++		return result > 0;
++	case '>=':
++		return result >= 0;
++	case '<<':
++		return result < 0;
++	case '>>':
++		return result > 0;
++	case '=':
++		return result === 0;
++	default:
++		return false;
++	}
++}
++
++function dependencyProviderCompatible(pkg, dependencyName, vop, ver)
++{
++	if (!vop)
++		return true;
++
++	const providedVersion = dependencyProviderVersion(pkg, dependencyName);
++
++	return providedVersion !== null && dependencyVersionSatisfied(providedVersion, ver, vop);
++}
++
++function compatibleDependencyProviders(source, dependencyName, vop, ver)
++{
++	const providers = [];
++	const seen = {};
++
++	(source.providers[dependencyName] || []).forEach(function(pkg) {
++		if (!dependencyProviderCompatible(pkg, dependencyName, vop, ver))
++			return;
++
++		const identity = JSON.stringify([
++			pkg.name || '',
++			pkg.version || '',
++			dependencyProviderVersion(pkg, dependencyName),
++			Array.isArray(pkg.depends) ? pkg.depends : [],
++			Array.isArray(pkg.provides) ? pkg.provides : []
++		]);
++
++		if (!seen[identity]) {
++			seen[identity] = true;
++			providers.push(pkg);
++		}
++	});
++
++	return providers;
++}
++
++function selectDependencyProvider(dependencyName, vop, ver)
++{
++	const installed = compatibleDependencyProviders(packages.installed, dependencyName, vop, ver);
++	const available = installed.length ? [] :
++		compatibleDependencyProviders(packages.available, dependencyName, vop, ver);
++	const candidates = installed.length ? installed : available;
++
++	return {
++		pkg: candidates.length === 1 ? candidates[0] : null,
++		ambiguous: candidates.length > 1
++	};
++}
++// TAIYI_PROVIDER_SELECTION_END
++
++function pkgStatus(pkg, vop, ver, info, dependencyName)
++{
++	const requiredName = dependencyName || pkg.name;
++	const providedVersion = dependencyProviderVersion(pkg, requiredName);
++	const displayVersion = providedVersion || '-';
++
+ 	info.errors = info.errors || [];
+ 	info.install = info.install || [];
+ 
+ 	if (isPkgInstalled(pkg)) {
+-		if (vop && !versionSatisfied(pkg.version, ver, vop)) {
++		if (vop && (!providedVersion || !dependencyVersionSatisfied(providedVersion, ver, vop))) {
+ 			let repl = null;
+ 
+-			(packages.available.providers[pkg.name] || []).forEach(function(p) {
+-				if (!repl && versionSatisfied(p.version, ver, vop))
++			(packages.available.providers[requiredName] || []).forEach(function(p) {
++				const replacementVersion = dependencyProviderVersion(p, requiredName);
++
++				if (!repl && replacementVersion && dependencyVersionSatisfied(replacementVersion, ver, vop))
+ 					repl = p;
+ 			});
+ 
+@@ -546,30 +651,30 @@ function pkgStatus(pkg, vop, ver, info)
+ 				}, _('Needs upgrade'));
+ 			}
+ 
+-			info.errors.push(_('The installed version of package <em>%h</em> is not compatible, require %s while %s is installed.').format(pkg.name, truncateVersion(ver, vop), truncateVersion(pkg.version)));
++			info.errors.push(_('The installed version of package <em>%h</em> is not compatible, require %s while %s is installed.').format(pkg.name, truncateVersion(ver, vop), truncateVersion(displayVersion)));
+ 
+ 			return E('span', {
+ 				'class': 'label warning',
+ 				'data-tooltip': _('Require version %h %h,\ninstalled %h')
+-					.format(vop, ver, pkg.version)
++					.format(vop, ver, displayVersion)
+ 			}, _('Version incompatible'));
+ 		}
+ 
+ 		return E('span', { 'class': 'label notice' }, _('Installed'));
+ 	}
+ 	else if (!pkg.missing) {
+-		if (!vop || versionSatisfied(pkg.version, ver, vop)) {
++		if (!vop || (providedVersion && dependencyVersionSatisfied(providedVersion, ver, vop))) {
+ 			info.install.push(pkg);
+ 			return E('span', { 'class': 'label' }, _('Not installed'));
+ 		}
+ 
+ 		info.errors.push(_('The repository version of package <em>%h</em> is not compatible, require %s but only %s is available.')
+-				.format(pkg.name, truncateVersion(ver, vop), truncateVersion(pkg.version)));
++				.format(pkg.name, truncateVersion(ver, vop), truncateVersion(displayVersion)));
+ 
+ 		return E('span', {
+ 			'class': 'label warning',
+ 			'data-tooltip': _('Require version %h %h,\ninstalled %h')
+-				.format(vop, ver, pkg.version)
++					.format(vop, ver, displayVersion)
+ 		}, _('Version incompatible'));
+ 	}
+ 	else {
+@@ -584,12 +689,15 @@ function renderDependencyItem(dep, info, flat)
+ 	const li = E('li');
+ 	const vop = dep.version ? dep.version[0] : null;
+ 	const ver = dep.version ? dep.version[1] : null;
++	const selection = selectDependencyProvider(dep.name, vop, ver);
+ 	const depends = [];
+ 
+ 	for (let i = 0; dep.pkgs && i < dep.pkgs.length; i++) {
+ 		const pkg = packages.installed.pkgs[dep.pkgs[i]] ||
+ 		          packages.available.pkgs[dep.pkgs[i]] ||
+ 		          { name: dep.name };
++		const selected = selection.pkg && selection.pkg.name === pkg.name;
++		const statusInfo = selected ? info : {};
+ 
+ 		if (i > 0)
+ 			li.appendChild(document.createTextNode(' | '));
+@@ -602,19 +710,32 @@ function renderDependencyItem(dep, info, flat)
+ 			text += ' (~%1024mB)'.format(pkg.size);
+ 
+ 		li.appendChild(E('span', { 'data-tooltip': pkg.description },
+-			[ text, ' ', pkgStatus(pkg, vop, ver, info) ]));
++			[ text, ' ', pkgStatus(pkg, vop, ver, statusInfo, dep.name) ]));
++	}
++
++	if (!li.firstChild) {
++		li.appendChild(E('span', {},
++			[ dep.name, ' ',
++			  pkgStatus({ name: dep.name, missing: true }, vop, ver, info, dep.name) ]));
++	}
++	else if (!selection.pkg && !selection.ambiguous) {
++		info.errors = info.errors || [];
++		info.errors.push(_('No installed or repository provider satisfies required dependency <em>%h</em>.').format(dep.name));
++	}
++	else if (selection.ambiguous) {
++		li.appendChild(E('span', {
++			'class': 'label notice',
++			'data-tooltip': _('Multiple compatible providers are available; the package solver selects the transaction provider.')
++		}, _('Solver choice')));
++	}
+ 
+-		(pkg.depends || []).forEach(function(d) {
++	if (selection.pkg) {
++		(selection.pkg.depends || []).forEach(function(d) {
+ 			if (depends.indexOf(d) === -1)
+ 				depends.push(d);
+ 		});
+ 	}
+ 
+-	if (!li.firstChild)
+-		li.appendChild(E('span', {},
+-			[ dep.name, ' ',
+-			  pkgStatus({ name: dep.name, missing: true }, vop, ver, info) ]));
+-
+ 	if (!flat) {
+ 		const subdeps = renderDependencies(depends, info);
+ 		if (subdeps)

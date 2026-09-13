@@ -192,7 +192,9 @@ jobs:
       - name: Verify Taiyi Build Invariants
         if: ${{ inputs.model == 'jdcloud_er1_libwrt' }}
         shell: bash
-        run: bash tests/taiyi-build-invariants.sh
+        run: |
+          node tests/taiyi-package-manager-provider-rendering.js
+          bash tests/taiyi-build-invariants.sh
 
       - name: Pre Clone
         shell: bash

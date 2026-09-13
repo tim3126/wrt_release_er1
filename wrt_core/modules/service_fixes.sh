@@ -142,6 +142,83 @@ restrict_er1_luci_apk_upgrade() {
 }
 
 
+taiyi_apk_dependency_rendering_fixed() {
+    local package_manager_js="$1"
+    local render_block
+    local status_block
+    local required_pattern
+
+    [[ $(grep -cF 'TAIYI_PROVIDER_SELECTION_BEGIN' "$package_manager_js" || true) -eq 1 ]] \
+        && [[ $(grep -cF 'TAIYI_PROVIDER_SELECTION_END' "$package_manager_js" || true) -eq 1 ]] \
+        || return 1
+    for required_pattern in \
+        'function dependencyProviderVersion(pkg, dependencyName)' \
+        'function dependencyVersionSatisfied(ver, ref, vop)' \
+        'function compatibleDependencyProviders(source, dependencyName, vop, ver)' \
+        'function selectDependencyProvider(dependencyName, vop, ver)'; do
+        [[ $(grep -cF "$required_pattern" "$package_manager_js" || true) -eq 1 ]] \
+            || return 1
+    done
+    status_block=$(awk '
+        /^function pkgStatus\(/ { capture = 1 }
+        /^function renderDependencyItem\(/ { capture = 0 }
+        capture { print }
+    ' "$package_manager_js")
+    grep -qF 'const providedVersion = dependencyProviderVersion(pkg, requiredName);' <<<"$status_block" \
+        && grep -qF 'dependencyVersionSatisfied(providedVersion, ver, vop)' <<<"$status_block" \
+        && grep -qF 'dependencyProviderVersion(p, requiredName)' <<<"$status_block" \
+        && ! grep -qF 'packages.available.providers[pkg.name]' <<<"$status_block" \
+        || return 1
+    render_block=$(awk '
+        /^function renderDependencyItem\(/ { capture = 1 }
+        /^function renderDependencies\(/ { capture = 0 }
+        capture { print }
+    ' "$package_manager_js")
+    grep -qF 'const selection = selectDependencyProvider(dep.name, vop, ver);' <<<"$render_block" \
+        && grep -qF 'const statusInfo = selected ? info : {};' <<<"$render_block" \
+        && grep -qF 'pkgStatus(pkg, vop, ver, statusInfo, dep.name)' <<<"$render_block" \
+        && grep -qF '(selection.pkg.depends || []).forEach(function(d)' <<<"$render_block" \
+        && ! grep -qF '(pkg.depends || []).forEach(function(d)' <<<"$render_block"
+}
+
+
+fix_er1_luci_apk_dependency_rendering() {
+    local package_manager_dir="$BUILD_DIR/package/feeds/luci/luci-app-package-manager"
+    local package_manager_js="$package_manager_dir/htdocs/luci-static/resources/view/package-manager.js"
+    local patch_file="$BASE_PATH/patches/003-taiyi-package-manager-provider-rendering.patch"
+    local stage_root
+    local stage_js
+
+    if [[ ! -f $package_manager_js || -L $package_manager_js || ! -f $patch_file || -L $patch_file ]]; then
+        echo "错误：缺少或拒绝非普通文件的 Taiyi LuCI dependency rendering 输入" >&2
+        return 1
+    fi
+    if taiyi_apk_dependency_rendering_fixed "$package_manager_js"; then
+        return 0
+    fi
+    if grep -qF 'TAIYI_PROVIDER_SELECTION_BEGIN' "$package_manager_js" \
+        || grep -qF 'TAIYI_PROVIDER_SELECTION_END' "$package_manager_js" \
+        || grep -qF 'function selectDependencyProvider(' "$package_manager_js"; then
+        echo "错误：拒绝部分应用的 Taiyi LuCI dependency rendering 修复" >&2
+        return 1
+    fi
+
+    stage_root="$package_manager_dir/.taiyi-provider-rendering.$$"
+    stage_js="$stage_root/htdocs/luci-static/resources/view/package-manager.js"
+    if ! mkdir -p "${stage_js%/*}" \
+        || ! cp -p "$package_manager_js" "$stage_js" \
+        || ! patch -d "$stage_root" -p1 --forward --fuzz=0 --no-backup-if-mismatch <"$patch_file" \
+        || ! taiyi_apk_dependency_rendering_fixed "$stage_js" \
+        || ! mv -f "$stage_js" "$package_manager_js"; then
+        rm -rf "$stage_root"
+        echo "错误：Taiyi LuCI dependency rendering 修复应用或验收失败" >&2
+        return 1
+    fi
+    rm -rf "$stage_root"
+    taiyi_apk_dependency_rendering_fixed "$package_manager_js"
+}
+
+
 netfilter_kmod_clash_include_fixed() {
     local include_netfilter_mk="$1"
 
