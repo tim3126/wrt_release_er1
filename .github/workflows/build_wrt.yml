@@ -193,6 +193,7 @@ jobs:
         if: ${{ inputs.model == 'jdcloud_er1_libwrt' }}
         shell: bash
         run: |
+          node tests/taiyi-cloud-release-workflow.js
           node tests/taiyi-package-manager-provider-rendering.js
           bash tests/taiyi-build-invariants.sh
 

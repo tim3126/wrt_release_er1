@@ -30,3 +30,443 @@ jobs:
       audited_builder_image: ""
       audited_builder_manifest_digest: ""
       audited_builder_config_image_id: ""
+
+  release:
+    name: Publish cloud pre-release
+    needs: build
+    if: ${{ github.ref == 'refs/heads/taiyi/r8-plugin-channel' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download Firmware Candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: firmware-jdcloud_er1_libwrt
+          path: firmware
+
+      - name: Validate and Prepare Cloud Release
+        id: release_metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          factory_name='libwrt-qualcommax-ipq60xx-jdcloud_re-cs-07-squashfs-factory.bin'
+          sysupgrade_name='libwrt-qualcommax-ipq60xx-jdcloud_re-cs-07-squashfs-sysupgrade.bin'
+          expected_files=(
+            BUILD_PROVENANCE.txt
+            config.buildinfo
+            feeds.buildinfo
+            "$factory_name"
+            "$sysupgrade_name"
+            libwrt-qualcommax-ipq60xx.manifest
+            profiles.json
+            SHA256SUMS
+            sha256sums
+            version.buildinfo
+          )
+          aggregate_members=(
+            BUILD_PROVENANCE.txt
+            config.buildinfo
+            feeds.buildinfo
+            "$factory_name"
+            "$sysupgrade_name"
+            libwrt-qualcommax-ipq60xx.manifest
+            profiles.json
+            sha256sums
+            version.buildinfo
+          )
+          image_manifest_members=(
+            config.buildinfo
+            feeds.buildinfo
+            "$factory_name"
+            "$sysupgrade_name"
+            libwrt-qualcommax-ipq60xx.manifest
+            profiles.json
+            version.buildinfo
+          )
+
+          mapfile -d '' actual_entries < <(find firmware -mindepth 1 -print0 | sort -z)
+          if (( ${#actual_entries[@]} != ${#expected_files[@]} )); then
+            echo "Expected ${#expected_files[@]} firmware entries, found ${#actual_entries[@]}." >&2
+            exit 1
+          fi
+          for entry in "${actual_entries[@]}"; do
+            if [[ ! -f $entry || -L $entry ]]; then
+              echo "Firmware artifact contains a non-regular entry: $entry" >&2
+              exit 1
+            fi
+          done
+          for expected_file in "${expected_files[@]}"; do
+            if [[ ! -s firmware/$expected_file ]]; then
+              echo "Required firmware file is missing or empty: $expected_file" >&2
+              exit 1
+            fi
+          done
+
+          validate_manifest_members() {
+            local manifest=$1
+            shift
+            local -a expected_members=("$@")
+            local -a actual_members=()
+            local line member
+            while IFS= read -r line || [[ -n $line ]]; do
+              if [[ ! $line =~ ^[0-9a-f]{64}[[:space:]]+\*?([^[:space:]]+)$ ]]; then
+                echo "Invalid checksum line in $manifest: $line" >&2
+                return 1
+              fi
+              member=${BASH_REMATCH[1]}
+              if [[ $member == /* || $member == *'/'* || $member == '.' || $member == '..' ]]; then
+                echo "Unsafe checksum member in $manifest: $member" >&2
+                return 1
+              fi
+              actual_members+=("$member")
+            done <"$manifest"
+            if (( ${#actual_members[@]} != ${#expected_members[@]} )); then
+              echo "Unexpected member count in $manifest." >&2
+              return 1
+            fi
+            if ! diff -u \
+              <(printf '%s\n' "${expected_members[@]}" | LC_ALL=C sort) \
+              <(printf '%s\n' "${actual_members[@]}" | LC_ALL=C sort); then
+              echo "Checksum member set mismatch in $manifest." >&2
+              return 1
+            fi
+          }
+
+          validate_manifest_members firmware/SHA256SUMS "${aggregate_members[@]}"
+          validate_manifest_members firmware/sha256sums "${image_manifest_members[@]}"
+          (cd firmware && sha256sum -c SHA256SUMS)
+          (cd firmware && sha256sum -c sha256sums)
+
+          grep -qFx "WrtReleaseCommit: $GITHUB_SHA" firmware/BUILD_PROVENANCE.txt
+          grep -qFx 'WrtReleaseTreeState: clean' firmware/BUILD_PROVENANCE.txt
+          grep -qFx 'BuildContainerImageRef: not-applicable' firmware/BUILD_PROVENANCE.txt
+          grep -qFx 'BuildContainerManifestDigest: not-applicable' firmware/BUILD_PROVENANCE.txt
+          grep -qFx 'BuildContainerImageId: native' firmware/BUILD_PROVENANCE.txt
+          grep -qFx 'TaiyiPluginFeedMode: disabled' firmware/BUILD_PROVENANCE.txt
+          grep -qFx 'Kernel: 6.12.103' firmware/BUILD_PROVENANCE.txt
+
+          factory_hash=$(sha256sum "firmware/$factory_name" | awk '{print $1}')
+          sysupgrade_hash=$(sha256sum "firmware/$sysupgrade_name" | awk '{print $1}')
+          factory_size=$(stat -c '%s' "firmware/$factory_name")
+          sysupgrade_size=$(stat -c '%s' "firmware/$sysupgrade_name")
+          jq -e \
+            --arg factory_name "$factory_name" \
+            --arg sysupgrade_name "$sysupgrade_name" \
+            --arg factory_hash "$factory_hash" \
+            --arg sysupgrade_hash "$sysupgrade_hash" \
+            --argjson factory_size "$factory_size" \
+            --argjson sysupgrade_size "$sysupgrade_size" '
+              (.profiles | keys == ["jdcloud_re-cs-07"]) and
+              (.profiles["jdcloud_re-cs-07"].supported_devices == ["jdcloud,re-cs-07"]) and
+              (.profiles["jdcloud_re-cs-07"].images | length == 2) and
+              ([.profiles["jdcloud_re-cs-07"].images[] |
+                select(.type == "factory" and .name == $factory_name and
+                       .sha256 == $factory_hash and .size == $factory_size)] | length == 1) and
+              ([.profiles["jdcloud_re-cs-07"].images[] |
+                select(.type == "sysupgrade" and .name == $sysupgrade_name and
+                       .sha256 == $sysupgrade_hash and .size == $sysupgrade_size)] | length == 1) and
+              (.linux_kernel.version == "6.12.103") and
+              (.version_number == "25.12.2")
+            ' firmware/profiles.json >/dev/null
+
+          mkdir release-assets
+          cp firmware/BUILD_PROVENANCE.txt release-assets/
+          cp firmware/config.buildinfo release-assets/
+          cp firmware/feeds.buildinfo release-assets/
+          cp "firmware/$factory_name" release-assets/
+          cp "firmware/$sysupgrade_name" release-assets/
+          cp firmware/libwrt-qualcommax-ipq60xx.manifest release-assets/
+          cp firmware/profiles.json release-assets/
+          cp firmware/version.buildinfo release-assets/
+          cp firmware/SHA256SUMS release-assets/GITHUB_ARTIFACT_SHA256SUMS
+          cp firmware/sha256sums release-assets/OPENWRT_IMAGE_SHA256SUMS
+
+          release_manifest_tmp="$RUNNER_TEMP/taiyi-cloud-release-SHA256SUMS"
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f -printf '%P\0' | sort -z | xargs -0 sha256sum
+          ) >"$release_manifest_tmp"
+          mv "$release_manifest_tmp" release-assets/SHA256SUMS
+          (cd release-assets && sha256sum -c SHA256SUMS)
+
+          mapfile -d '' release_files < <(find release-assets -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
+          if (( ${#release_files[@]} != 11 )); then
+            echo "Expected 11 release assets, found ${#release_files[@]}." >&2
+            exit 1
+          fi
+          if (( $(wc -l <release-assets/SHA256SUMS) != 10 )); then
+            echo 'Release SHA256SUMS must contain exactly 10 members.' >&2
+            exit 1
+          fi
+
+          short_commit=${GITHUB_SHA:0:12}
+          release_tag="taiyi-25.12.2-k6.12.103-cloud-r${GITHUB_RUN_NUMBER}-${short_commit}"
+          release_title="Taiyi 25.12.2 - kernel 6.12.103 cloud candidate (${short_commit})"
+          printf 'release_tag=%s\n' "$release_tag" >>"$GITHUB_OUTPUT"
+          printf 'release_title=%s\n' "$release_title" >>"$GITHUB_OUTPUT"
+
+          {
+            echo '## Taiyi / JDCloud RE-CS-07 GitHub cloud candidate'
+            echo
+            echo "Automatically built and preserved by GitHub Actions run [$GITHUB_RUN_ID](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+            echo
+            echo '### Build identity'
+            echo
+            echo "- \`wrt_release\`: \`$GITHUB_SHA\`"
+            echo '- Build environment: GitHub-hosted Ubuntu 24.04 native runner'
+            echo '- Status: cloud candidate pre-release; not Latest or audited production firmware'
+            echo
+            echo '### Firmware SHA-256'
+            echo
+            echo '```text'
+            sha256sum "release-assets/$factory_name" "release-assets/$sysupgrade_name"
+            echo '```'
+            echo
+            echo 'Verify all assets with `SHA256SUMS`. `GITHUB_ARTIFACT_SHA256SUMS` preserves the original Actions aggregate manifest; `OPENWRT_IMAGE_SHA256SUMS` preserves the OpenWrt image manifest without a Windows case-insensitive filename collision.'
+            echo
+            echo 'Successful compilation and static gates do not replace independent device, recovery, or soak acceptance. Use `sysupgrade.bin` only to upgrade a running OpenWrt system; use `factory.bin` only for the documented installation or recovery path. Run `sysupgrade -T` first and never bypass board checks with `sysupgrade -F`.'
+          } >release_body.md
+
+      - name: Publish and Verify Cloud Pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_metadata.outputs.release_tag }}
+          RELEASE_TITLE: ${{ steps.release_metadata.outputs.release_title }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          local_assets=(release-assets/*)
+          if (( ${#local_assets[@]} != 11 )); then
+            echo "Expected 11 local release assets, found ${#local_assets[@]}." >&2
+            exit 1
+          fi
+
+          repo_owner=${GITHUB_REPOSITORY%%/*}
+          repo_name=${GITHUB_REPOSITORY#*/}
+
+          ensure_release_tag() {
+            local tag_row tag_type tag_target
+            if ! tag_row=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+              --jq '[.object.type, .object.sha] | @tsv' 2>/dev/null); then
+              gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f ref="refs/tags/$RELEASE_TAG" \
+                -f sha="$GITHUB_SHA" >/dev/null
+              tag_row=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+                --jq '[.object.type, .object.sha] | @tsv')
+            fi
+            IFS=$'\t' read -r tag_type tag_target <<<"$tag_row"
+            if [[ $tag_type != commit || $tag_target != "$GITHUB_SHA" ]]; then
+              echo "Release tag has type $tag_type and target $tag_target; expected commit $GITHUB_SHA." >&2
+              return 1
+            fi
+          }
+
+          validate_not_latest() {
+            local release_json=$1
+            local release_id latest_release_id
+            release_id=$(jq -r '.databaseId' <<<"$release_json")
+            latest_release_id=$(gh api graphql \
+              -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){latestRelease{databaseId}}}' \
+              -f owner="$repo_owner" \
+              -f name="$repo_name" \
+              --jq '.data.repository.latestRelease.databaseId // empty')
+            if [[ -n $latest_release_id && $latest_release_id == "$release_id" ]]; then
+              echo "Cloud pre-release $release_id must not be Latest." >&2
+              return 1
+            fi
+          }
+
+          validate_release_identity() {
+            local release_json=$1
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              --arg target "$GITHUB_SHA" '
+                .isPrerelease == true and
+                .tagName == $tag and
+                .targetCommitish == $target and
+                (.isDraft == true or .isDraft == false)
+              ' <<<"$release_json" >/dev/null
+          }
+
+          validate_remote_assets() {
+            local release_json=$1
+            local download_dir=$2
+            local -a remote_rows=()
+            local -a remote_names=()
+            local row name size local_path local_hash remote_hash unique_count
+
+            mapfile -t remote_rows < <(jq -r '.assets[] | [.name, (.size | tostring)] | @tsv' <<<"$release_json")
+            if (( ${#remote_rows[@]} > ${#local_assets[@]} )); then
+              echo "Remote release contains too many assets: ${#remote_rows[@]}." >&2
+              return 1
+            fi
+            for row in "${remote_rows[@]}"; do
+              IFS=$'\t' read -r name size <<<"$row"
+              if [[ ! $name =~ ^[A-Za-z0-9._-]+$ || ! $size =~ ^[0-9]+$ ]]; then
+                echo "Unsafe remote asset metadata: $name" >&2
+                return 1
+              fi
+              local_path="release-assets/$name"
+              if [[ ! -f $local_path || -L $local_path ]]; then
+                echo "Unexpected remote asset: $name" >&2
+                return 1
+              fi
+              if [[ $(stat -c '%s' "$local_path") != "$size" ]]; then
+                echo "Remote asset size mismatch: $name" >&2
+                return 1
+              fi
+              remote_names+=("$name")
+            done
+            if (( ${#remote_names[@]} > 0 )); then
+              unique_count=$(printf '%s\n' "${remote_names[@]}" | LC_ALL=C sort -u | wc -l)
+              if (( unique_count != ${#remote_names[@]} )); then
+                echo 'Remote release contains duplicate asset names.' >&2
+                return 1
+              fi
+              mkdir "$download_dir"
+              gh release download "$RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --dir "$download_dir"
+              mapfile -d '' downloaded_entries < <(find "$download_dir" -mindepth 1 -print0 | sort -z)
+              if (( ${#downloaded_entries[@]} != ${#remote_names[@]} )); then
+                echo "Downloaded asset count mismatch in $download_dir." >&2
+                return 1
+              fi
+              for name in "${remote_names[@]}"; do
+                if [[ ! -f $download_dir/$name || -L $download_dir/$name ]]; then
+                  echo "Downloaded asset is missing or unsafe: $name" >&2
+                  return 1
+                fi
+                local_hash=$(sha256sum "release-assets/$name" | awk '{print $1}')
+                remote_hash=$(sha256sum "$download_dir/$name" | awk '{print $1}')
+                if [[ $remote_hash != "$local_hash" ]]; then
+                  echo "Downloaded asset hash mismatch: $name" >&2
+                  return 1
+                fi
+              done
+            fi
+          }
+
+          ensure_release_tag
+          release_json=''
+          if release_json=$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,isDraft,isPrerelease,tagName,targetCommitish,assets,url 2>/dev/null); then
+            validate_release_identity "$release_json"
+            validate_remote_assets "$release_json" existing-release-download
+          else
+            gh release create "$RELEASE_TAG" "${local_assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release_body.md \
+              --draft \
+              --prerelease \
+              --latest=false
+            release_json=$(gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json databaseId,isDraft,isPrerelease,tagName,targetCommitish,assets,url)
+            validate_release_identity "$release_json"
+          fi
+
+          is_draft=$(jq -r '.isDraft' <<<"$release_json")
+          if [[ $is_draft == true ]]; then
+            mapfile -t remote_names < <(jq -r '.assets[].name' <<<"$release_json")
+            missing_assets=()
+            for local_asset in "${local_assets[@]}"; do
+              local_name=${local_asset##*/}
+              found=false
+              for remote_name in "${remote_names[@]}"; do
+                if [[ $remote_name == "$local_name" ]]; then
+                  found=true
+                  break
+                fi
+              done
+              if [[ $found == false ]]; then
+                missing_assets+=("$local_asset")
+              fi
+            done
+            if (( ${#missing_assets[@]} > 0 )); then
+              gh release upload "$RELEASE_TAG" "${missing_assets[@]}" \
+                --repo "$GITHUB_REPOSITORY"
+            fi
+          fi
+
+          release_json=$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,isDraft,isPrerelease,tagName,targetCommitish,assets,url)
+          validate_release_identity "$release_json"
+          if (( $(jq '.assets | length' <<<"$release_json") != 11 )); then
+            echo 'Release must contain exactly 11 assets before publication.' >&2
+            exit 1
+          fi
+          validate_remote_assets "$release_json" release-download
+          (cd release-download && sha256sum -c SHA256SUMS)
+
+          local_hashes="$RUNNER_TEMP/taiyi-cloud-release-local.sha256"
+          downloaded_hashes="$RUNNER_TEMP/taiyi-cloud-release-downloaded.sha256"
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f -printf '%P\0' | sort -z | xargs -0 sha256sum
+          ) >"$local_hashes"
+          (
+            cd release-download
+            find . -maxdepth 1 -type f -printf '%P\0' | sort -z | xargs -0 sha256sum
+          ) >"$downloaded_hashes"
+          diff -u "$local_hashes" "$downloaded_hashes"
+
+          ensure_release_tag
+          if [[ $(jq -r '.isDraft' <<<"$release_json") == false ]]; then
+            validate_not_latest "$release_json"
+          fi
+          if [[ $(jq -r '.isDraft' <<<"$release_json") == true ]]; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft=false \
+              --prerelease \
+              --latest=false
+          fi
+
+          published_json=$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,isDraft,isPrerelease,tagName,targetCommitish,assets,url)
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            --arg target "$GITHUB_SHA" '
+              .isDraft == false and
+              .isPrerelease == true and
+              .tagName == $tag and
+              .targetCommitish == $target and
+              (.assets | length == 11)
+            ' <<<"$published_json" >/dev/null
+          validate_not_latest "$published_json"
+
+          tag_type=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.type')
+          tag_target=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          if [[ $tag_type != commit || $tag_target != "$GITHUB_SHA" ]]; then
+            echo "Release tag has type $tag_type and target $tag_target; expected commit $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+          mkdir public-verify
+          curl --fail --location --silent --show-error \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            --output public-verify/SHA256SUMS \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/SHA256SUMS"
+          cmp release-assets/SHA256SUMS public-verify/SHA256SUMS
+
+          release_url=$(jq -r '.url' <<<"$published_json")
+          {
+            echo '## Published cloud pre-release'
+            echo
+            echo "- Release: [$RELEASE_TAG]($release_url)"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo '- Classification: Pre-release, not Latest'
+            echo '- Assets: 11, with post-upload SHA-256 verification'
+          } >>"$GITHUB_STEP_SUMMARY"

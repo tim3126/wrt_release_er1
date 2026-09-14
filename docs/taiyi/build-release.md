@@ -95,13 +95,14 @@ BUILD_JOBS=8
 
 ## GitHub 云编译与发布
 
-- `Build WRT` 是可复用的候选构建入口，也可手动选择 `jdcloud_er1_libwrt`；它生成可下载 artifact，但不创建 Release。
-- `Build Taiyi Push Candidate` 监听 `taiyi/r8-plugin-channel` 的非文档 push，也支持从 Actions 页面手动触发；两种触发方式都固定调用 `Build WRT(model=jdcloud_er1_libwrt)`。成功后上传 `firmware-jdcloud_er1_libwrt` Actions artifact，保留 14 天；该路径使用 GitHub native runner，只用于云端候选验证，不满足生产 Release 的 audited-builder 身份门禁。
-- `Release Taiyi Firmware` 是 taiyi 专用生产入口，只允许手动触发，固定使用默认 fragments，并通过 `taiyi-production` environment 执行发布 job。
-- 构建 job 只有 `contents: read` 权限；发布 job 不执行上游构建代码，只下载已经通过门禁的 artifact，并拥有最小 `contents: write` 权限。
+- `Build WRT` 是可复用的候选构建入口，也可单独手动选择 `jdcloud_er1_libwrt`；它只生成可下载 artifact，不自行创建 Release。
+- `Build Taiyi Push Candidate` 监听 `taiyi/r8-plugin-channel` 的非文档 push，也支持从 Actions 页面在该分支手动触发；两种触发方式都固定调用 `Build WRT(model=jdcloud_er1_libwrt)`。构建成功后先上传保留 14 天的 `firmware-jdcloud_er1_libwrt` artifact，再自动创建长期 GitHub cloud Pre-release。
+- cloud Release job 不 checkout 仓库或执行 artifact 内脚本；它只下载同一 run 的 artifact，要求固定 10 个原始文件，验证原始 `SHA256SUMS`、OpenWrt `sha256sums`、clean/native provenance、唯一 `jdcloud_re-cs-07` profile 和两种镜像的名称、大小及 hash。原 manifests 分别保留为 `GITHUB_ARTIFACT_SHA256SUMS` 与 `OPENWRT_IMAGE_SHA256SUMS`，并为 11 个 Release assets 生成新的 `SHA256SUMS`。
+- cloud Release 先创建或验证直接指向本次 `GITHUB_SHA` 的 lightweight tag，再以 Draft + Pre-release 上传；重新下载全部 11 个 assets 并逐项比较 SHA-256、再次验证 tag target 后才发布。tag 格式为 `taiyi-25.12.2-k6.12.103-cloud-r<run-number>-<12位commit>`，发布后通过 GraphQL 确认不是 Latest。创建 Draft 后的失败会保留现场；同 run 重跑只接受 tag/target/Pre-release 状态完全匹配的 Draft，验证已有 assets 后仅补传缺失项。匹配且已发布的 Pre-release 会完整回读验收后幂等成功，任何身份或内容不一致都失败关闭。
+- `Release Taiyi Firmware` 仍是独立的 taiyi audited production 入口，只允许手动触发，固定使用默认 fragments，并通过 `taiyi-production` environment 执行发布 job；cloud Pre-release 不满足或替代这条生产门禁。
+- build job 只有 `contents: read` 权限；cloud Release job 仅在前者成功后获得 `actions: read` 与 `contents: write`。外部 pull request 不触发该 workflow，但业务分支本身仍需仓库权限与保护规则限制可写主体。
 - ER1 门禁要求恰好一个 `factory.bin` 和一个 `sysupgrade.bin`、不允许其他 `.bin`，并校验 SHA-256 和内嵌的 `jdcloud,re-cs-07` metadata。
-- Release 白名单只包含这两种镜像、manifest、profiles、三份 buildinfo、provenance 和 SHA-256。
-- workflow 使用固定 commit 的官方 Actions，不执行远程 `curl | sudo bash` 环境脚本。
+- workflow 使用固定 commit 的官方 Artifact Actions；自动 cloud Release 使用 GitHub runner 预装的 `gh` CLI，不执行远程 `curl | sudo bash` 环境脚本，也不依赖未验证的第三方 Release action。
 
 首次同步到专用 GitHub 仓库时，应同时推送 `main` 和 `taiyi/r8-plugin-channel`，并将仓库默认分支调整为 `taiyi/r8-plugin-channel`，使 Actions 页面默认展示当前 Taiyi workflow。首次 push candidate 成功只证明 GitHub native runner 能构建并通过候选门禁；不要据此自动创建生产 Release。
 
